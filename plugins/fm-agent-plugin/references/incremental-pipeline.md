@@ -13,7 +13,7 @@ automatically written intent. Every selection must be recorded in
 6. `select_scope`: include changed and propagated functions; exclude every other indexed function with a reason.
 7. `update_specs`: restore only hash-compatible headers, regenerate affected contracts, reconcile caller `[INFO]` expectations, and write native `fm_agent/incremental_updated_specs.json`.
 8. `verify_affected`: write a result for each selected function; use `DEPENDENCY_RISK` rather than converting a callee's direct mismatch into a caller mismatch.
-9. `bug_validation`: validate only new direct `MISMATCH` candidates in an isolated probe build and update the summary only when candidates exist.
+9. `bug_validation`: validate only selected direct `MISMATCH` candidates in an isolated probe build. When one exists, rebuild its probe under `fm_agent_plugin/probes/<current-run-id>/`, then overwrite `fm_agent/bug_validation/summary.json` with `run_id` equal to the current incremental run. A summary from an earlier full or incremental run never satisfies this phase.
 10. `finalize`: gate all retained and selected artifacts, then save the new baseline.
 
 Deleted functions must be absent from the plugin control analysis index, extracted artifacts,

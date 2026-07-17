@@ -44,7 +44,7 @@ def main():
             record["current_phase"] = phase; record["phase_status"][phase] = {"status": "running", "started_at": state.now()}
         elif args.action == "phase-complete":
             if phase not in record["phases"]: raise SystemExit("unknown phase")
-            gate = validate(target, record["mode"], phase, record.get("inputs", {}).get("submodules", []))
+            gate = validate(target, record["mode"], phase, record.get("inputs", {}).get("submodules", []), record["id"])
             if not gate["ok"]: raise SystemExit(gate["reason"])
             record["phase_status"][phase] = {"status": "succeeded", "ended_at": state.now()}; index = record["phases"].index(phase)
             record["current_phase"] = record["phases"][index + 1] if index + 1 < len(record["phases"]) else phase

@@ -17,3 +17,9 @@ smaller configured retry limit applies. Emit a verification JSON object matching
 `MISMATCH` for a reasoned local violation, `DEPENDENCY_RISK` when only a
 callee's direct mismatch affects the caller's outcome, and `ERROR` for failure
 to reason. Do not manufacture a caller `MISMATCH` solely from a callee result.
+
+For an input parser/converter, reject a `MATCH` when its specification excludes
+malformed input solely by assuming validity, while an in-scope caller can pass
+unvalidated text or bytes. Re-open the specification using
+[specification-rules.md](specification-rules.md)'s input-domain rule, then
+check full-consumption and rejection paths as local behavior.

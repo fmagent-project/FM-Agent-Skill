@@ -11,12 +11,23 @@ from _common import project, state
 def json_object(path): return isinstance(state.read_json(path, None), dict)
 
 
-def has_direct_mismatch(target):
+def has_direct_mismatch(target, mode, run_id):
+    selected = None
+    if mode == "incremental":
+        decision = state.read_json(state.control_dir(target) / "incremental_decision.json", {})
+        if decision.get("run_id") != run_id or not isinstance(decision.get("included"), dict): return False
+        selected = set(decision["included"])
     results = state.fm_dir(target) / "logic_verification_results"
     for path in results.rglob("*.json") if results.is_dir() else []:
-        if state.read_json(path, {}).get("verdict") == "MISMATCH":
+        result = state.read_json(path, {})
+        if result.get("verdict") == "MISMATCH" and (selected is None or result.get("function_id") in selected):
             return True
     return False
+
+
+def bug_summary_for_run(target, run_id):
+    summary = state.read_json(state.fm_dir(target) / "bug_validation" / "summary.json", {})
+    return isinstance(summary, dict) and summary.get("run_id") == run_id
 
 
 def call_graph_ready(target):
@@ -29,7 +40,7 @@ def call_graph_ready(target):
         and state.phase_layers_ready(target)[0]
     )
 
-def validate(target, mode, phase, submodules):
+def validate(target, mode, phase, submodules, run_id=None):
     fm = state.fm_dir(target)
     checks = {
         "preflight": lambda: state.preflight(target)["ok"],
@@ -39,7 +50,7 @@ def validate(target, mode, phase, submodules):
         "call_graph": lambda: call_graph_ready(target),
         "specification": lambda: state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
         "verification": lambda: state.function_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
-        "bug_validation": lambda: (not has_direct_mismatch(target)) or json_object(fm / "bug_validation" / "summary.json"),
+        "bug_validation": lambda: (not has_direct_mismatch(target, mode, run_id)) or bug_summary_for_run(target, run_id),
         "finalize": lambda: True,
         "validate_baseline": lambda: state.scoped_functions(target, submodules) != [],
         "refresh_plan": lambda: json_object(fm / "phases.json"),
@@ -59,8 +70,8 @@ def validate(target, mode, phase, submodules):
 
 def main():
     parser = argparse.ArgumentParser(description="Check a deterministic FM-Agent phase gate.")
-    parser.add_argument("--project", required=True); parser.add_argument("--mode", required=True, choices=tuple(state.PHASES)); parser.add_argument("--phase", required=True); parser.add_argument("--submodule", action="append", default=[])
-    args = parser.parse_args(); result = validate(project(args), args.mode, args.phase, args.submodule)
+    parser.add_argument("--project", required=True); parser.add_argument("--mode", required=True, choices=tuple(state.PHASES)); parser.add_argument("--phase", required=True); parser.add_argument("--run-id"); parser.add_argument("--submodule", action="append", default=[])
+    args = parser.parse_args(); result = validate(project(args), args.mode, args.phase, args.submodule, args.run_id)
     print(json.dumps(result, ensure_ascii=False, indent=2)); raise SystemExit(0 if result["ok"] else 2)
 
 

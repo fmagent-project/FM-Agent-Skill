@@ -11,3 +11,8 @@ caller must be reconsidered in incremental selection but must not create a
 duplicate bug report. For a CMake project, build every probe in
 `fm_agent_plugin/probes/<run-id>/<bug-id>/build/` through `probe_build.py`.
 Never reuse the project's existing `build/` directory or its `CMakeCache.txt`.
+
+For an incremental run, consider only direct `MISMATCH` results whose
+`function_id` appears in that run's `incremental_decision.json.included` map.
+If candidates exist, replace `summary.json` with a new summary whose `run_id`
+is the current run; never reuse an earlier summary or probe as confirmation.
