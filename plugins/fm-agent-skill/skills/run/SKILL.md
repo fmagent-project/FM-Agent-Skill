@@ -21,8 +21,12 @@ starting the selected pipeline.
 
 ## Public parameters
 
+Codex selects this skill from a natural-language request; this skill directory
+does not create a Codex slash command. When a client exposes a command entry,
+it may pass the following arguments to the same workflow:
+
 ```text
-/fm-agent:run [natural-language change note]
+[natural-language change note]
   [--submodule path ...] [--one-phase]
   [--extra-edge file-or-dir] [--knowledge file ...] [--isolate]
 ```

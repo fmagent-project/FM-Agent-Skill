@@ -39,13 +39,13 @@ no-op provenance refreshes.
 
 ## Installation
 
-Both marketplaces expose the plugin as `fm-agent-plugin`.
+Both marketplaces expose the plugin as `fm-agent-skill`.
 
 ### Codex
 
 ```bash
 codex plugin marketplace add fmagent-project/FM-Agent-Skill
-codex plugin add fm-agent-plugin@fm-agent-plugin
+codex plugin add fm-agent-skill@fm-agent-skill
 ```
 
 Start a new Codex task after installation or an update so the refreshed skills
@@ -55,7 +55,7 @@ are loaded.
 
 ```bash
 claude plugin marketplace add fmagent-project/FM-Agent-Skill
-claude plugin install fm-agent-plugin@fm-agent-plugin
+claude plugin install fm-agent-skill@fm-agent-skill
 ```
 
 Start a new Claude Code session after installation.
@@ -75,7 +75,10 @@ Optionally state the change under review:
 Use FM-Agent to analyze the current Git project. Focus on changes to calculator input parsing.
 ```
 
-The public entry point is `/fm-agent:run`:
+In Codex, invoke the `run` skill with the natural-language request above;
+installing a skill does not register a Codex slash command. The workflow accepts
+the following change note and options when a client exposes a command entry or
+passes them in the request:
 
 ```text
 /fm-agent:run [change note]
@@ -181,7 +184,7 @@ commit identity alone.
 .
 ├── .agents/plugins/marketplace.json    # Codex marketplace manifest
 ├── .claude-plugin/marketplace.json     # Claude Code marketplace manifest
-└── plugins/fm-agent-plugin/
+└── plugins/fm-agent-skill/
     ├── skills/                         # run, help, install, diagnose, config
     ├── scripts/                        # dispatch, state, locks, graph, validation
     ├── src/fm_agent_core/              # shared state and artifact logic
@@ -204,16 +207,16 @@ FM-Agent Skill 是同时支持 Codex 和 Claude Code 的代码正确性分析插
 
 ## 安装与使用
 
-插件名为 `fm-agent-plugin`。安装命令：
+插件名为 `fm-agent-skill`。安装命令：
 
 ```bash
 # Codex
 codex plugin marketplace add fmagent-project/FM-Agent-Skill
-codex plugin add fm-agent-plugin@fm-agent-plugin
+codex plugin add fm-agent-skill@fm-agent-skill
 
 # Claude Code
 claude plugin marketplace add fmagent-project/FM-Agent-Skill
-claude plugin install fm-agent-plugin@fm-agent-plugin
+claude plugin install fm-agent-skill@fm-agent-skill
 ```
 
 安装后新建 task 或会话。在目标 Git 项目中直接请求：
@@ -222,8 +225,9 @@ claude plugin install fm-agent-plugin@fm-agent-plugin
 使用 FM-Agent 分析当前 Git 项目
 ```
 
-也可以使用 `/fm-agent:run` 并附带修改说明、`--submodule`、`--knowledge`、
-`--extra-edge`、`--one-phase` 或 `--isolate`。
+Codex 使用上面的自然语言请求触发 `run` skill；安装 skill 不会自动注册 Codex 斜杠命令。
+支持命令入口的客户端或请求可附带修改说明、`--submodule`、`--knowledge`、`--extra-edge`、
+`--one-phase` 或 `--isolate`。
 
 ## 运行方式与产物
 

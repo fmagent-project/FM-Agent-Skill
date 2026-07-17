@@ -1,5 +1,5 @@
 {
-  "name": "fm-agent-plugin",
+  "name": "fm-agent-skill",
   "version": "0.1.0",
   "description": "Skill-guided FM-Agent correctness-analysis workflow.",
   "author": { "name": "FM-Agent" },

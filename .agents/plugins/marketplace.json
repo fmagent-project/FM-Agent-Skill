@@ -1,14 +1,14 @@
 {
-  "name": "fm-agent-plugin",
+  "name": "fm-agent-skill",
   "interface": {
-    "displayName": "FM-Agent Plugin"
+    "displayName": "FM-Agent Skill"
   },
   "plugins": [
     {
-      "name": "fm-agent-plugin",
+      "name": "fm-agent-skill",
       "source": {
         "source": "local",
-        "path": "./plugins/fm-agent-plugin"
+        "path": "./plugins/fm-agent-skill"
       },
       "policy": {
         "installation": "AVAILABLE",
