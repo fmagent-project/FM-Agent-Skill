@@ -54,7 +54,8 @@ def main():
             missing = [phase for phase in record["phases"] if record["phase_status"].get(phase, {}).get("status") != "succeeded"]
             if missing: raise SystemExit("cannot complete: phase gates not passed: " + ", ".join(missing))
             record.update({"status": "succeeded", "ended_at": state.now()})
-            state.atomic_json(state.plugin_dir(target) / "baseline.json", {"schema_version": 2, "commit": state.git(target, "rev-parse", "HEAD"), "fingerprint": record["fingerprint"], "inputs": record["inputs"], "run_id": record["id"], "completed_at": record["ended_at"]})
+            commit = state.git(target, "rev-parse", "HEAD")
+            state.atomic_json(state.plugin_dir(target) / "baseline.json", {"schema_version": 3, "analysis_commit": commit, "observed_commit": commit, "observed_at": record["ended_at"], "source_snapshot": state.source_snapshot(target, record["inputs"].get("submodules", [])), "fingerprint": record["fingerprint"], "inputs": record["inputs"], "run_id": record["id"], "completed_at": record["ended_at"]})
         elif args.action == "fail": record.update({"status": "failed", "ended_at": state.now(), "failure": args.message})
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})
     save(target, record)

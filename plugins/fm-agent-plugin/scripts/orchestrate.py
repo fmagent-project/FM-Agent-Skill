@@ -67,8 +67,9 @@ def inspect(target, args):
     if issues: return {"ok": False, "issues": issues}
     fingerprint, _ = state.fingerprint(target, config["one_phase"], config["submodules"], config.get("extra_edge"), config["knowledge"], config)
     baseline = state.inspect_baseline(target, fingerprint, config["submodules"])
-    if baseline["valid"] and not state.changed_since(target, baseline["commit"]):
-        return {"ok": True, "mode": "noop", "baseline": baseline, "config": config, "requires_codegraph": False}
+    if baseline["valid"] and not baseline["snapshot_changed"]:
+        current_commit = state.git(target, "rev-parse", "HEAD")
+        return {"ok": True, "mode": "noop", "baseline": baseline, "config": config, "requires_codegraph": False, "refresh_observed_commit": baseline["saved"].get("observed_commit") != current_commit}
     return {"ok": True, "mode": "incremental" if baseline["valid"] else "full", "baseline": baseline, "config": config, "requires_codegraph": True}
 
 
@@ -98,7 +99,8 @@ def main():
     try: lock = acquire(target, run_id, args.force_stale_lock)
     except RuntimeError as exc: print(json.dumps({"ok": False, "reason": str(exc)}, ensure_ascii=False, indent=2)); raise SystemExit(2)
     try:
-        if baseline["valid"] and not state.changed_since(target, baseline["commit"]):
+        if baseline["valid"] and not baseline["snapshot_changed"]:
+            state.refresh_observed_commit(target, baseline["saved"])
             record = {"id": run_id, "mode": "noop", "status": "noop", "started_at": state.now(), "ended_at": state.now(), "fingerprint": fingerprint, "inputs": inputs, "baseline_commit": baseline["commit"]}
             state.atomic_json(state.plugin_dir(target) / "runs" / f"{run_id}.json", record); state.atomic_json(state.plugin_dir(target) / "active.json", record); release(target, run_id, "idle")
             result = {"ok": True, "mode": "noop", "run_id": run_id, "baseline": baseline, "config": config, "lock_released": True}

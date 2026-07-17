@@ -104,12 +104,39 @@ def fingerprint(project: Path, one_phase: bool, submodules: list[str], extra_edg
 
 
 def source_files(project: Path) -> list[Path]:
-    ignored = {".git", ".venv", "node_modules", "fm_agent", "fm_agent_plugin"}
+    ignored = {".git", ".venv", "node_modules", "fm_agent", "fm_agent_plugin", ".codegraph", "build", "dist", "out", "target", "CMakeFiles"}
     found = []
     for root, directories, files in os.walk(project):
         directories[:] = [name for name in directories if name not in ignored]
         found.extend(Path(root) / name for name in files if Path(name).suffix.lower() in SOURCE_EXTENSIONS)
     return found
+
+
+def source_snapshot(project: Path, submodules: list[str] | None = None) -> dict[str, str]:
+    """Return the complete, scoped source-content snapshot for baseline reuse."""
+    scopes = submodules or []
+    snapshot = {}
+    for path in source_files(project):
+        rel = path.relative_to(project).as_posix()
+        if scopes and not any(rel == item.rstrip("/") or rel.startswith(item.rstrip("/") + "/") for item in scopes):
+            continue
+        digest = file_hash(path)
+        if digest: snapshot[rel] = digest
+    return dict(sorted(snapshot.items()))
+
+
+def snapshot_changed(project: Path, saved: dict, submodules: list[str] | None = None) -> bool:
+    snapshot = saved.get("source_snapshot") if isinstance(saved, dict) else None
+    return not isinstance(snapshot, dict) or snapshot != source_snapshot(project, submodules)
+
+
+def refresh_observed_commit(project: Path, saved: dict) -> dict:
+    """Advance Git provenance after a no-op without changing the analyzed snapshot."""
+    current = git(project, "rev-parse", "HEAD")
+    if saved.get("observed_commit") != current:
+        saved["observed_commit"] = current; saved["observed_at"] = now()
+        atomic_json(plugin_dir(project) / "baseline.json", saved)
+    return saved
 
 
 def preflight(project: Path) -> dict:
@@ -299,9 +326,9 @@ def inspect_baseline(project: Path, config_fingerprint: str, submodules: list[st
     if not isinstance(phases, dict) or not isinstance(phases.get("phases"), list):
         return {"valid": False, "reason": "missing or invalid fm_agent/phases.json"}
     saved = read_json(plugin_dir(project) / "baseline.json", {})
-    if not isinstance(saved, dict) or saved.get("fingerprint") != config_fingerprint:
+    if not isinstance(saved, dict) or saved.get("schema_version") != 3 or saved.get("fingerprint") != config_fingerprint:
         return {"valid": False, "reason": "analysis range or configuration is incompatible"}
-    commit = saved.get("commit")
+    commit = saved.get("analysis_commit")
     if not isinstance(commit, str):
         return {"valid": False, "reason": "missing successful baseline commit"}
     try:
@@ -320,7 +347,9 @@ def inspect_baseline(project: Path, config_fingerprint: str, submodules: list[st
     run = read_json(plugin_dir(project) / "active.json", {})
     if run and (run.get("status") != "succeeded" or run.get("mode") not in {"full", "incremental"}):
         return {"valid": False, "reason": "last analysis did not complete"}
-    return {"valid": True, "commit": commit, "function_count": len(functions)}
+    if not isinstance(saved.get("source_snapshot"), dict):
+        return {"valid": False, "reason": "missing source snapshot"}
+    return {"valid": True, "commit": commit, "function_count": len(functions), "snapshot_changed": snapshot_changed(project, saved, submodules), "saved": saved}
 
 
 def untracked_sources(project: Path) -> list[str]:

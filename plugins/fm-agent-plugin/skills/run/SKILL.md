@@ -55,8 +55,11 @@ acquires a lock, writes state, rebuilds CodeGraph, or needs authorization:
   [--extra-edge "$FILE_OR_DIR"] [--one-phase] [--isolate]
 ```
 
-If inspection returns `noop`, report its baseline commit and finish. Do not
-run `codegraph.py status` and do not ask for CodeGraph permission.
+If inspection returns `noop` and `refresh_observed_commit` is false, report its
+baseline commit and finish. Do not run `codegraph.py status` and do not ask for
+CodeGraph permission. If `refresh_observed_commit` is true, run the stateful
+`dispatch` command below **without** `--codegraph`; it writes the no-op record
+and refreshes only Git provenance, then finish.
 
 Only when inspection returns `full` or `incremental`, inspect CodeGraph:
 
