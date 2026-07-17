@@ -92,10 +92,23 @@ def main():
     if args.action == "inspect":
         result = inspect(target, args); print(json.dumps(result, ensure_ascii=False, indent=2)); raise SystemExit(0 if result["ok"] else 2)
     if not preflight["ok"]: print(json.dumps({"ok": False, "preflight": preflight}, ensure_ascii=False, indent=2)); raise SystemExit(2)
-    config = build_config(args, target); issues = valid_settings(target, config)
+    # A no-op refresh must use the same effective configuration that made the
+    # existing baseline valid.  In particular, a previous CodeGraph run must
+    # not become an agent-static run simply because this invocation does not
+    # need (or authorize) CodeGraph.
+    reusable_config = inspection_config(args, target, saved_config(target))
+    issues = valid_settings(target, reusable_config)
     if issues: print(json.dumps({"ok": False, "issues": issues}, ensure_ascii=False, indent=2)); raise SystemExit(2)
-    fingerprint, inputs = state.fingerprint(target, config["one_phase"], config["submodules"], config.get("extra_edge"), config["knowledge"], config)
-    baseline = state.inspect_baseline(target, fingerprint, config["submodules"]); run_id = f"run-{uuid.uuid4().hex[:12]}"
+    reusable_fingerprint, reusable_inputs = state.fingerprint(target, reusable_config["one_phase"], reusable_config["submodules"], reusable_config.get("extra_edge"), reusable_config["knowledge"], reusable_config)
+    reusable_baseline = state.inspect_baseline(target, reusable_fingerprint, reusable_config["submodules"])
+    if reusable_baseline["valid"] and not reusable_baseline["snapshot_changed"]:
+        config, fingerprint, inputs, baseline = reusable_config, reusable_fingerprint, reusable_inputs, reusable_baseline
+    else:
+        config = build_config(args, target); issues = valid_settings(target, config)
+        if issues: print(json.dumps({"ok": False, "issues": issues}, ensure_ascii=False, indent=2)); raise SystemExit(2)
+        fingerprint, inputs = state.fingerprint(target, config["one_phase"], config["submodules"], config.get("extra_edge"), config["knowledge"], config)
+        baseline = state.inspect_baseline(target, fingerprint, config["submodules"])
+    run_id = f"run-{uuid.uuid4().hex[:12]}"
     try: lock = acquire(target, run_id, args.force_stale_lock)
     except RuntimeError as exc: print(json.dumps({"ok": False, "reason": str(exc)}, ensure_ascii=False, indent=2)); raise SystemExit(2)
     try:

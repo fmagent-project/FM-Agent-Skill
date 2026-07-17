@@ -344,9 +344,15 @@ def inspect_baseline(project: Path, config_fingerprint: str, submodules: list[st
     layers_ready, layers_reason = phase_layers_ready(project)
     if not layers_ready:
         return {"valid": False, "reason": layers_reason}
-    run = read_json(plugin_dir(project) / "active.json", {})
-    if run and (run.get("status") != "succeeded" or run.get("mode") not in {"full", "incremental"}):
-        return {"valid": False, "reason": "last analysis did not complete"}
+    # ``active.json`` describes the most recent attempt.  A failed later
+    # attempt must not invalidate the successful run named by the baseline.
+    # The baseline's own run is the evidence whose completion matters here.
+    run_id = saved.get("run_id")
+    if not isinstance(run_id, str) or Path(run_id).name != run_id:
+        return {"valid": False, "reason": "missing successful baseline run"}
+    run = read_json(plugin_dir(project) / "runs" / f"{run_id}.json", {})
+    if run.get("status") != "succeeded" or run.get("mode") not in {"full", "incremental"}:
+        return {"valid": False, "reason": "baseline run did not complete"}
     if not isinstance(saved.get("source_snapshot"), dict):
         return {"valid": False, "reason": "missing source snapshot"}
     return {"valid": True, "commit": commit, "function_count": len(functions), "snapshot_changed": snapshot_changed(project, saved, submodules), "saved": saved}
