@@ -1,0 +1,25 @@
+{
+  "name": "fm-agent-plugin",
+  "version": "0.1.0+codex.20260717032827",
+  "description": "Skill-guided FM-Agent correctness-analysis workflow for Codex.",
+  "author": {
+    "name": "FM-Agent"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "FM-Agent",
+    "shortDescription": "Guide formal code analysis with FM-Agent artifacts.",
+    "longDescription": "Guides a coding agent through FM-Agent full and incremental analysis while deterministic tools manage baselines, intents, state, and diagnostics.",
+    "developerName": "FM-Agent",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Analyze this Git project with FM-Agent.",
+      "Diagnose the latest FM-Agent bug reports.",
+      "Configure the FM-Agent analysis scope."
+    ]
+  }
+}

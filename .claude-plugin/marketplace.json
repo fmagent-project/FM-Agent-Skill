@@ -1,0 +1,18 @@
+{
+  "name": "fm-agent-plugin",
+  "description": "Local marketplace for the FM-Agent skill-guided correctness-analysis plugin.",
+  "owner": {
+    "name": "FM-Agent"
+  },
+  "plugins": [
+    {
+      "name": "fm-agent-plugin",
+      "source": "./plugins/fm-agent-plugin",
+      "description": "Skill-guided FM-Agent correctness-analysis workflow for Codex and Claude Code.",
+      "version": "0.1.0",
+      "author": {
+        "name": "FM-Agent"
+      }
+    }
+  ]
+}

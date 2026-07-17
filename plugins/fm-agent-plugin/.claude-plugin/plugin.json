@@ -1,0 +1,8 @@
+{
+  "name": "fm-agent-plugin",
+  "version": "0.1.0",
+  "description": "Skill-guided FM-Agent correctness-analysis workflow.",
+  "author": { "name": "FM-Agent" },
+  "repository": "https://github.com/fmagent-project/FM-Agent",
+  "license": "MIT"
+}
