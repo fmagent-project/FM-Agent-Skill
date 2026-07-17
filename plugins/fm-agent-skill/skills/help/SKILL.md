@@ -62,11 +62,11 @@ Codex and Claude Code. Their manifests only provide discovery; each skill
 resolves its plugin root from its own `SKILL.md` location as defined in
 [runtime-path.md](../../references/runtime-path.md).
 
-Explain that `run` detects optional CodeGraph support before analysis. The
-agent asks permission before removing and regenerating the derived CodeGraph
-index and asks again before installing unavailable software. If CodeGraph is
-not used, the agent records a best-effort static call graph rather than
-claiming exact graph precision.
+Explain that `run` detects optional CodeGraph support before analysis. When it
+is available, full and incremental analysis automatically remove and regenerate
+the derived CodeGraph index without requesting authorization. The plugin does
+not install unavailable software; it records a best-effort static call graph
+rather than claiming exact graph precision.
 
 ## Explain the current capabilities
 

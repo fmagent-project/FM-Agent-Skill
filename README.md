@@ -26,16 +26,17 @@ no-op provenance refreshes.
   business source content changes.
 - Skip repeated analysis when business source content is unchanged, even when
   the Git commit changes.
-- Use CodeGraph with explicit permission for an exact call graph, or record an
-  `agent-static` best-effort fallback when it is unavailable or declined.
+- Use CodeGraph automatically for an exact call graph when it is available, or
+  record an `agent-static` best-effort fallback when it is unavailable.
 
 ## Prerequisites
 
 - The target must be a Git repository with a resolvable `HEAD`.
 - The target must contain at least one supported source file.
 - Install and sign in to either Codex or Claude Code.
-- CodeGraph is optional. The agent asks for permission before it installs or
-  rebuilds an index; the plugin does not install software on its own.
+- CodeGraph is optional. When available, it is rebuilt automatically for a
+  full or incremental analysis. The plugin does not install missing software;
+  it records an `agent-static` fallback instead.
 
 ## Installation
 
@@ -104,9 +105,9 @@ plugin selects it from its baseline and source snapshot.
 
 | State | Mode | CodeGraph behavior |
 | --- | --- | --- |
-| No usable baseline, or incomplete baseline artifacts | full | Requests permission before rebuilding the index when CodeGraph is selected. |
-| Valid baseline and changed business source content | incremental | Requests permission before rebuilding the index when CodeGraph is selected. |
-| Valid baseline and unchanged business source content | no-op | Does not inspect, rebuild, or request permission for CodeGraph. |
+| No usable baseline, or incomplete baseline artifacts | full | Rebuilds the index automatically when CodeGraph is available. |
+| Valid baseline and changed business source content | incremental | Rebuilds the index automatically when CodeGraph is available. |
+| Valid baseline and unchanged business source content | no-op | Does not inspect or rebuild CodeGraph. |
 | Only the Git commit changed | no-op | Refreshes `observed_commit` only and retains the analysis baseline. |
 
 The baseline separates two kinds of provenance:
@@ -121,14 +122,14 @@ content does not cause a duplicate analysis.
 
 ## CodeGraph and precision
 
-CodeGraph is used only for a full or incremental analysis. Before use, the
-agent explains that `$PROJECT/.codegraph/` will be removed and rebuilt, then
-asks for permission.
+CodeGraph is used only for a full or incremental analysis. When it is
+available, the plugin automatically removes and rebuilds
+`$PROJECT/.codegraph/`; no separate authorization is requested.
 
-- Authorized and rebuilt successfully: call-graph precision is recorded as
+- Available and rebuilt successfully: call-graph precision is recorded as
   `exact`.
-- Unavailable or declined: `agent-static` is used with `best-effort` precision
-  and a fallback reason.
+- Unavailable: `agent-static` is used with `best-effort` precision and a
+  fallback reason.
 - No-op: `.codegraph/` is not touched.
 
 ## Artifacts
@@ -139,7 +140,7 @@ Artifacts are written to the target project, not the plugin installation:
 | --- | --- |
 | `fm_agent/` | Function extraction, phase specifications, verification results, and FM-Agent-style bug-validation reports. |
 | `fm_agent_plugin/` | Baselines, run records, locks, control indexes, precision records, incremental decisions, and isolated probes. |
-| `.codegraph/` | Generated CodeGraph index, rebuilt only during authorized full or incremental runs. |
+| `.codegraph/` | Generated CodeGraph index, rebuilt only during full or incremental runs when CodeGraph is available. |
 
 Useful files include:
 
@@ -234,7 +235,7 @@ Codex 使用上面的自然语言请求触发 `run` skill；安装 skill 不会�
 - 无可用基线时执行 full；业务源码变化时自动执行 incremental。
 - 源码内容未变时执行 no-op；即使只新增 Git 提交，也只更新 `observed_commit`，不会重建
   CodeGraph。
-- CodeGraph 仅在 full 或 incremental 时，经授权后重建；否则记录 `agent-static` 回退。
+- CodeGraph 仅在 full 或 incremental 时自动重建；不可用时记录 `agent-static` 回退。
 - `fm_agent/` 保存规约、验证和缺陷报告；`fm_agent_plugin/` 保存基线、运行记录和控制状态；
   `.codegraph/` 保存生成索引。建议将三者加入目标项目的 `.gitignore`。
 

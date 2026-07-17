@@ -50,7 +50,7 @@ def inspection_config(args, target, saved):
 
     Public run options and explicit repository config still override it. This
     prevents an unchanged CodeGraph baseline from looking incompatible merely
-    because the caller has not yet authorized CodeGraph for this invocation.
+    because a no-op invocation does not need to rebuild CodeGraph.
     """
     baseline = state.read_json(state.plugin_dir(target) / "baseline.json", {})
     prior = baseline.get("inputs", {}).get("config") if isinstance(baseline, dict) else None
@@ -95,7 +95,7 @@ def main():
     # A no-op refresh must use the same effective configuration that made the
     # existing baseline valid.  In particular, a previous CodeGraph run must
     # not become an agent-static run simply because this invocation does not
-    # need (or authorize) CodeGraph.
+    # need to rebuild CodeGraph.
     reusable_config = inspection_config(args, target, saved_config(target))
     issues = valid_settings(target, reusable_config)
     if issues: print(json.dumps({"ok": False, "issues": issues}, ensure_ascii=False, indent=2)); raise SystemExit(2)

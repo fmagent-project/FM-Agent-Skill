@@ -50,7 +50,7 @@ natural-language change note:
 
 All remaining text is the change note. Preserve every option value and pass
 each option separately. First perform this read-only inspection. It never
-acquires a lock, writes state, rebuilds CodeGraph, or needs authorization:
+acquires a lock, writes state, or rebuilds CodeGraph:
 
 ```bash
 <python3> "$FM_AGENT_PLUGIN_ROOT/scripts/orchestrate.py" inspect \
@@ -60,8 +60,8 @@ acquires a lock, writes state, rebuilds CodeGraph, or needs authorization:
 ```
 
 If inspection returns `noop` and `refresh_observed_commit` is false, report its
-baseline commit and finish. Do not run `codegraph.py status` and do not ask for
-CodeGraph permission. If `refresh_observed_commit` is true, run the stateful
+baseline commit and finish. Do not run `codegraph.py status`. If
+`refresh_observed_commit` is true, run the stateful
 `dispatch` command below **without** `--codegraph`; it writes the no-op record
 and refreshes only Git provenance, then finish.
 
@@ -71,15 +71,13 @@ Only when inspection returns `full` or `incremental`, inspect CodeGraph:
 <python3> "$FM_AGENT_PLUGIN_ROOT/scripts/codegraph.py" status --project "$PROJECT"
 ```
 
-If it is available, ask permission to use it, explaining that this required
-analysis run removes and regenerates `$PROJECT/.codegraph/`. If it is not
-available, ask whether installation is authorized. Do not install software
-without explicit approval and do not consider Erlang/ELP. On approval, include
-the internal `--codegraph` option below. On decline, dispatch without it, use
+If it is available, include the internal `--codegraph` option below and rebuild
+`$PROJECT/.codegraph/` automatically. Proceed directly. If it is
+not available, do not install software; dispatch without `--codegraph`, use
 `agent-static`, and record the fallback reason. A selected CodeGraph rebuild
 failure fails the run; do not silently change backend.
 
-After that decision, run exactly one stateful dispatch command:
+After determining availability, run exactly one stateful dispatch command:
 
 ```bash
 <python3> "$FM_AGENT_PLUGIN_ROOT/scripts/orchestrate.py" dispatch \

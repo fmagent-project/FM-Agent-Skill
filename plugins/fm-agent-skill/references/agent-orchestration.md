@@ -15,13 +15,12 @@ and artifact gates; they do not replace semantic analysis.
 
 ## Optional CodeGraph backend
 
-Before dispatch, run `codegraph.py status`. If CodeGraph is available, ask the
-user for permission to use it because every full or incremental run removes
-and regenerates the generated `<project>/.codegraph/` index. If it is
-unavailable, ask whether the user authorizes an installation. Do not install
-software without explicit approval.
+Before dispatch, run `codegraph.py status`. If CodeGraph is available, use it
+automatically: every full or incremental run removes and regenerates the
+generated `<project>/.codegraph/` index. Proceed directly. If it
+is unavailable, do not install software; use the static fallback.
 
-After approval and availability, dispatch with `--codegraph`, then rebuild the
+When available, dispatch with `--codegraph`, then rebuild the
 index through `codegraph.py init --rebuild` while the analysis lock is held.
 Read it through `codegraph.py export`; map its function/method nodes to the
 current source index by repository path and line range, and map
@@ -31,7 +30,7 @@ current source index by repository path and line range, and map
 rebuild failure fails this CodeGraph-selected run; do not silently substitute a
 different backend.
 
-If the user declines CodeGraph or installation, continue with the agent's
-static analysis. Record `backend: "agent-static"`, `precision: "best-effort"`,
-and the reason in `fm_agent_plugin/control/call_graph_precision.json`. Never label a fallback graph as
+If CodeGraph is unavailable, continue with the agent's static analysis. Record
+`backend: "agent-static"`, `precision: "best-effort"`, and the reason in
+`fm_agent_plugin/control/call_graph_precision.json`. Never label a fallback graph as
 exact. Erlang/ELP is outside the current scope.
