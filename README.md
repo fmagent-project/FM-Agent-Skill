@@ -117,6 +117,10 @@ inputs. It retains the original run id, validates completed stages, and starts
 at the first incomplete one. A source-changing commit requires a normal new
 analysis; a commit with identical source content can still resume.
 
+FM-Agent displays the run id and a `Stage current/total` update before each
+analysis stage. A resumed run announces its recovery stage; a no-op explicitly
+states that no analysis stage was required.
+
 If the interrupted run has a heartbeat newer than the configured ten-minute
 resume grace period, FM-Agent asks before taking over its lock. Confirm only
 after the earlier agent or task has stopped. A resumed run records its count,
@@ -275,6 +279,8 @@ Codex 使用上面的自然语言请求触发 `run` skill；安装 skill 不会�
 ```
 
 resume 会保留原 run id，从第一个未完成阶段继续；只有源码内容和原分析配置均未变化时才会执行。源码改变后应重新运行；仅提交了相同源码内容时仍可续跑。
+
+full、incremental 和 resume 都会在每个阶段前显示 run id 与“当前阶段/总阶段数”；resume 会先显示恢复位置，no-op 会明确说明没有执行分析阶段。
 
 若旧 run 的心跳仍在默认 10 分钟宽限期内，FM-Agent 会先询问是否接管锁。只有确认旧 task 已停止后才应同意接管。恢复次数、恢复时间和恢复阶段会记录在 `fm_agent_plugin/runs/<run-id>.json`。
 

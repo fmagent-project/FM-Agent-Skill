@@ -83,6 +83,10 @@ the derived CodeGraph index without requesting authorization. The plugin does
 not install unavailable software; it records a best-effort static call graph
 rather than claiming exact graph precision.
 
+Explain that full, incremental, and resumed analyses display a user-visible
+run id and stage progress. A resumed run announces the stage from which it is
+continuing; no-op reports that no analysis stage ran.
+
 ## Explain the current capabilities
 
 Currently, the plugin supports a full `run_pipeline`, automatic baseline-driven

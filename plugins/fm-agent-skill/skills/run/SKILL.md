@@ -19,6 +19,10 @@ and Claude Code; never use `CLAUDE_SKILL_DIR`.
 Read [agent-orchestration.md](../../references/agent-orchestration.md) before
 starting the selected pipeline.
 
+Read [progress-reporting.md](../../references/progress-reporting.md) before any
+stateful action. User-visible phase progress is mandatory in both Codex and
+Claude Code; do not rely on a client to infer it from tool output.
+
 ## Public parameters
 
 Codex selects this skill from a natural-language request; this skill directory
@@ -95,6 +99,10 @@ validation phase; retain only hash-compatible valid artifacts and produce only
 the missing or invalid ones. Refresh the lock heartbeat before and after each
 phase through the existing `pipeline.py` transitions.
 
+Before beginning the resumed phase, emit the required `Resuming` status from
+[progress-reporting.md](../../references/progress-reporting.md). It is also the
+user-visible announcement for that phase; announce every later phase normally.
+
 Keep the original call-graph backend for the resumed run. If the first
 incomplete phase is `call_graph` or `rebuild_graph` and its saved backend is
 CodeGraph, check the existing index; reuse it when readable and rebuild only
@@ -104,8 +112,9 @@ with `agent-static`.
 
 When `--resume` is absent, use the ordinary workflow below.
 
-If inspection returns `noop` and `refresh_observed_commit` is false, report its
-baseline commit and finish. Do not run `codegraph.py status`. If
+If inspection returns `noop` and `refresh_observed_commit` is false, report a
+user-visible no-op status and its baseline commit, then finish. Do not run
+`codegraph.py status`. If
 `refresh_observed_commit` is true, run the stateful
 `dispatch` command below **without** `--codegraph`; it writes the no-op record
 and refreshes only Git provenance, then finish.
@@ -138,8 +147,9 @@ when absent.  For example, `review checkout changes --submodule backend
 --knowledge payments.md` must dispatch with note `review checkout changes`,
 `--submodule backend`, and `--knowledge payments.md` as distinct arguments.
 
-`dispatch` should return the inspected non-noop mode. Retain its `run_id` and
-execute only the selected
+`dispatch` should return the inspected non-noop mode. Retain its `run_id`, emit
+the required `Started` status from
+[progress-reporting.md](../../references/progress-reporting.md), and execute only the selected
 pipeline. If `--codegraph` was selected, rebuild its generated index while the
 run lock is held before extraction or graph construction:
 
@@ -153,12 +163,13 @@ During graph construction, read its normalized function and edge data with:
 <python3> "$FM_AGENT_PLUGIN_ROOT/scripts/codegraph.py" export --project "$PROJECT"
 ```
 
-Before each phase call `pipeline.py phase-start`; after producing its artifacts
-call `pipeline.py phase-complete`. A failed gate means do not enter the next
-phase. On every exception, tool failure, or user-requested stop, run
+Before each phase emit the required `Stage current/total` status, then call
+`pipeline.py phase-start`; after producing its artifacts call
+`pipeline.py phase-complete`, then emit the short completion status. A failed
+gate means do not enter the next phase. On every exception, tool failure, or user-requested stop, run
 `pipeline.py fail`; it releases its owned lock while preserving artifacts and
 the final run record. `pipeline.py complete` likewise releases its owned lock.
-Report the last completed phase.
+Report the last completed phase and the phase that did not finish.
 
 When `pipeline.py phase-start` begins `phase_cleanup` in a `full` run, it
 automatically clears only old derived artifacts; it never removes business
