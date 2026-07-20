@@ -29,6 +29,16 @@ def stale(target, record, ttl):
     return not isinstance(run, dict) or run.get("status") != "running"
 
 
+def age_seconds(record):
+    started = record.get("heartbeat_at") or record.get("started_at")
+    if not isinstance(started, str):
+        return float("inf")
+    try:
+        return max(0.0, (state.dt.datetime.now(state.dt.timezone.utc) - state.dt.datetime.fromisoformat(started)).total_seconds())
+    except ValueError:
+        return float("inf")
+
+
 def terminal_run(target, record):
     """Return the completed run record that makes an existing lock safe to reclaim."""
     run_id = record.get("run_id")
@@ -64,7 +74,34 @@ def acquire(target, run_id, force_stale=False):
 def heartbeat(target, run_id):
     record = read_lock(target)
     if record.get("run_id") != run_id: raise RuntimeError("lock is not owned by this run")
-    record["heartbeat_at"] = state.now(); state.atomic_json(lock_path(target), record); publish(target, record); return record
+    record["heartbeat_at"] = state.now(); state.atomic_json(lock_path(target), record)
+    # Keep the complete run record in active.json.  Publishing the abbreviated
+    # lock payload here used to erase current_phase and phase_status.
+    active = state.read_json(status_path(target), {})
+    if isinstance(active, dict) and active.get("id") == run_id and active.get("status") == "running":
+        active["heartbeat_at"] = record["heartbeat_at"]
+        state.atomic_json(status_path(target), active)
+    else:
+        publish(target, record)
+    return record
+
+
+def reclaim_for_resume(target, run_id, take_over=False):
+    """Acquire an interrupted run's lock without silently replacing live work."""
+    existing = read_lock(target)
+    if not existing:
+        return acquire(target, run_id, False)
+    owner = existing.get("run_id")
+    if owner != run_id:
+        if terminal_run(target, existing):
+            lock_path(target).unlink(missing_ok=True)
+            return acquire(target, run_id, False)
+        raise RuntimeError("another FM-Agent analysis owns the active lock")
+    grace = load(target).get("resume_grace_seconds", 600)
+    if not take_over and age_seconds(existing) < grace:
+        raise RuntimeError("interrupted run still has a fresh heartbeat; wait or explicitly confirm lock takeover")
+    lock_path(target).unlink(missing_ok=True)
+    return acquire(target, run_id, False)
 
 def release(target, run_id, status="idle"):
     record = read_lock(target)
@@ -79,13 +116,16 @@ def release(target, run_id, status="idle"):
 
 def main():
     parser = argparse.ArgumentParser(description="Manage FM-Agent's atomic repository lock.")
-    parser.add_argument("action", choices=("acquire", "heartbeat", "release", "status")); parser.add_argument("--project", required=True); parser.add_argument("--run-id"); parser.add_argument("--force-stale", action="store_true"); parser.add_argument("--status", default="idle")
+    parser.add_argument("action", choices=("acquire", "heartbeat", "release", "resume", "status")); parser.add_argument("--project", required=True); parser.add_argument("--run-id"); parser.add_argument("--force-stale", action="store_true"); parser.add_argument("--take-over", action="store_true"); parser.add_argument("--status", default="idle")
     args = parser.parse_args(); target = project(args)
     try:
         if args.action == "status": result = read_lock(target) or state.read_json(status_path(target), {})
         elif args.action == "acquire":
             if not args.run_id: parser.error("acquire requires --run-id")
             result = acquire(target, args.run_id, args.force_stale)
+        elif args.action == "resume":
+            if not args.run_id: parser.error("resume requires --run-id")
+            result = reclaim_for_resume(target, args.run_id, args.take_over)
         elif args.action == "heartbeat":
             if not args.run_id: parser.error("heartbeat requires --run-id")
             result = heartbeat(target, args.run_id)

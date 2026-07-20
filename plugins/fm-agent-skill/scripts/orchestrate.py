@@ -11,7 +11,7 @@ from pathlib import Path
 
 from _common import project, state
 from config import load
-from locking import acquire, release
+from locking import acquire, reclaim_for_resume, release
 
 
 def valid_settings(target, config):
@@ -73,6 +73,17 @@ def inspect(target, args):
     return {"ok": True, "mode": "incremental" if baseline["valid"] else "full", "baseline": baseline, "config": config, "requires_codegraph": True}
 
 
+def resume_overrides(args):
+    """Resume is tied to immutable original inputs; callers may not alter them."""
+    return bool(args.note.strip() or args.submodules or args.knowledge or args.extra_edge is not None or args.one_phase or args.isolate or args.codegraph)
+
+
+def inspect_resume(target, args):
+    if resume_overrides(args):
+        return {"ok": False, "reason": "resume cannot override the interrupted run's scope or configuration"}
+    return state.inspect_resume(target, args.run_id)
+
+
 def pipeline_prepare(target, mode, run_id, config):
     command = [sys.executable, str(Path(__file__).with_name("pipeline.py")), "prepare", "--project", str(target), "--mode", mode, "--run-id", run_id, "--config-json", json.dumps(config)]
     for item in config["submodules"]: command += ["--submodule", item]
@@ -85,12 +96,46 @@ def pipeline_prepare(target, mode, run_id, config):
     return json.loads(completed.stdout)
 
 
+def pipeline_resume(target, run_id):
+    command = [sys.executable, str(Path(__file__).with_name("pipeline.py")), "resume", "--project", str(target), "--run-id", run_id]
+    completed = subprocess.run(command, text=True, capture_output=True)
+    if completed.returncode:
+        raise RuntimeError(completed.stderr.strip() or completed.stdout.strip())
+    return json.loads(completed.stdout)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Preflight, lock, baseline selection, and plan creation for FM-Agent.")
-    parser.add_argument("action", choices=("inspect", "dispatch")); parser.add_argument("--project", required=True); parser.add_argument("--note", default=""); parser.add_argument("--submodule", dest="submodules", action="append", default=[]); parser.add_argument("--one-phase", action="store_true"); parser.add_argument("--extra-edge"); parser.add_argument("--knowledge", action="append", default=[]); parser.add_argument("--isolate", action="store_true"); parser.add_argument("--codegraph", action="store_true"); parser.add_argument("--force-stale-lock", action="store_true")
+    parser.add_argument("action", choices=("inspect", "dispatch", "resume-inspect", "resume")); parser.add_argument("--project", required=True); parser.add_argument("--note", default=""); parser.add_argument("--submodule", dest="submodules", action="append", default=[]); parser.add_argument("--one-phase", action="store_true"); parser.add_argument("--extra-edge"); parser.add_argument("--knowledge", action="append", default=[]); parser.add_argument("--isolate", action="store_true"); parser.add_argument("--codegraph", action="store_true"); parser.add_argument("--force-stale-lock", action="store_true"); parser.add_argument("--run-id"); parser.add_argument("--take-over", action="store_true")
     args = parser.parse_args(); target = project(args); preflight = state.preflight(target)
     if args.action == "inspect":
         result = inspect(target, args); print(json.dumps(result, ensure_ascii=False, indent=2)); raise SystemExit(0 if result["ok"] else 2)
+    if args.action == "resume-inspect":
+        if not preflight["ok"]:
+            print(json.dumps({"ok": False, "preflight": preflight}, ensure_ascii=False, indent=2)); raise SystemExit(2)
+        result = inspect_resume(target, args); print(json.dumps(result, ensure_ascii=False, indent=2)); raise SystemExit(0 if result["ok"] else 2)
+    if args.action == "resume":
+        if not preflight["ok"]:
+            print(json.dumps({"ok": False, "preflight": preflight}, ensure_ascii=False, indent=2)); raise SystemExit(2)
+        checked = inspect_resume(target, args)
+        if not checked["ok"]:
+            print(json.dumps(checked, ensure_ascii=False, indent=2)); raise SystemExit(2)
+        run_id = checked["run_id"]
+        try:
+            lock = reclaim_for_resume(target, run_id, args.take_over)
+            record = pipeline_resume(target, run_id)
+        except Exception as exc:
+            # A failed recovery must not leave a fresh lock owned by this
+            # invocation. Existing run artifacts and its prior terminal state
+            # remain available for diagnosis.
+            prior = state.run_record(target, run_id)
+            if prior:
+                state.atomic_json(state.plugin_dir(target) / "active.json", prior)
+            try: release(target, run_id, "failed")
+            except RuntimeError: pass
+            print(json.dumps({"ok": False, "reason": str(exc), "run_id": run_id}, ensure_ascii=False, indent=2)); raise SystemExit(2)
+        result = {"ok": True, "mode": "resume", "run_id": run_id, "resume_from_phase": record["current_phase"], "config": checked["config"], "lock": lock, "plan": record}
+        print(json.dumps(result, ensure_ascii=False, indent=2)); return
     if not preflight["ok"]: print(json.dumps({"ok": False, "preflight": preflight}, ensure_ascii=False, indent=2)); raise SystemExit(2)
     # A no-op refresh must use the same effective configuration that made the
     # existing baseline valid.  In particular, a previous CodeGraph run must

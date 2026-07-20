@@ -13,6 +13,12 @@ owned lock. On failure use `pipeline.py fail`, which also releases its owned
 lock. The deterministic scripts own dispatch, locking, state, fingerprints,
 and artifact gates; they do not replace semantic analysis.
 
+For an explicit resume, first use `orchestrate.py resume-inspect` and then
+`orchestrate.py resume`; use the returned existing run id and first incomplete
+phase. Do not dispatch a new run or repeat earlier successful phases. Read
+[resume-contract.md](resume-contract.md) before re-entering an interrupted
+phase.
+
 ## Optional CodeGraph backend
 
 Before dispatch, run `codegraph.py status`. If CodeGraph is available, use it

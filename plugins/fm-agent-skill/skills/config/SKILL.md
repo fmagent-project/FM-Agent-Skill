@@ -7,7 +7,7 @@ description: View, update, and reset persistent FM-Agent analysis defaults for s
 
 Configuration lives at `fm_agent_plugin/config.json` in the target repository.
 It holds defaults for submodules, one-phase and isolation policy, concurrency,
-granularity, retry count, lock TTL, the CodeGraph command and selected graph
+granularity, retry count, lock TTL, resume grace period, the CodeGraph command and selected graph
 backend, extra-edge reference, and Markdown knowledge references. It never
 copies API keys or knowledge file contents.
 

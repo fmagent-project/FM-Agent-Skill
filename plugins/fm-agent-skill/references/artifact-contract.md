@@ -14,7 +14,7 @@ forward slashes.
 - Layer artifact: `{phase, phase_id?, phase_name, source_files, total_layers, layers}`. `source_files` must match that phase's declared source files. Each layer function is an object containing at least `function_id`, `artifact`, and `source_file`; `source_file` must belong to `source_files`. A function may occur in only one phase-layer artifact. Preserve the repository-relative original source path here even if the extracted artifact has a generated path.
 - Verification result: `{function, function_id, source_hash, verdict, gaps?, error?}`. `MISMATCH` means a local implementation/spec violation; `DEPENDENCY_RISK` means a caller is affected by a callee mismatch but has no independently established local violation. `function_id` and `source_hash` must exactly match the control analysis-index item.
 - Finding/bug result: records function identity, spec claim, implementation evidence, trigger/probe, output, and status `candidate`, `confirmed`, `rejected`, or `error`. `summary.json` counts each status.
-- Run: `fm_agent_plugin/runs/<run-id>.json` records `mode`, `phase_status`, inputs, fingerprint, timestamps, and terminal state. `baseline.json` is written only by a successfully completed run.
+- Run: `fm_agent_plugin/runs/<run-id>.json` records `mode`, `phase_status`, inputs, fingerprint, timestamps, and terminal state. Resumable runs additionally retain their starting source snapshot, effective configuration, phase history, and resume count. `baseline.json` is written only by a successfully completed run.
 
 There must be exactly one required extracted artifact and one required result
 path for every current indexed function. Removed functions must not remain in

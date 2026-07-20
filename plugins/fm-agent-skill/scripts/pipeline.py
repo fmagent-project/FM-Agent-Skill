@@ -7,7 +7,7 @@ import json
 import uuid
 
 from _common import common_scope, project, scope, state
-from locking import release
+from locking import heartbeat, release
 from reset_full_artifacts import reset
 from stage_gate import validate
 
@@ -19,7 +19,7 @@ def save(target, record):
 
 def main():
     parser = argparse.ArgumentParser(description="Record gated FM-Agent analysis progress.")
-    parser.add_argument("action", choices=("prepare", "phase-start", "phase-complete", "phase-fail", "advance", "complete", "fail", "noop"))
+    parser.add_argument("action", choices=("prepare", "resume", "phase-start", "phase-complete", "phase-fail", "advance", "complete", "fail", "noop"))
     common_scope(parser); parser.add_argument("--mode", choices=("full", "incremental")); parser.add_argument("--run-id"); parser.add_argument("--phase"); parser.add_argument("--message", default=""); parser.add_argument("--config-json", default="{}")
     args = parser.parse_args(); target = project(args)
     if args.action == "prepare":
@@ -31,17 +31,63 @@ def main():
         if not args.extra_edge: args.extra_edge = effective_config.get("extra_edge")
         if not args.knowledge: args.knowledge = effective_config.get("knowledge", [])
         run_id = args.run_id or f"run-{uuid.uuid4().hex[:12]}"; fingerprint, inputs = scope(args, effective_config)
-        record = {"id": run_id, "mode": args.mode, "status": "running", "started_at": state.now(), "current_phase": state.PHASES[args.mode][0], "phases": state.PHASES[args.mode], "phase_status": {}, "fingerprint": fingerprint, "inputs": inputs}
+        record = {
+            "schema_version": 2,
+            "id": run_id,
+            "mode": args.mode,
+            "status": "running",
+            "started_at": state.now(),
+            "current_phase": state.PHASES[args.mode][0],
+            "phases": state.PHASES[args.mode],
+            "phase_status": {},
+            "phase_history": {},
+            "fingerprint": fingerprint,
+            "inputs": inputs,
+            "start_commit": state.git(target, "rev-parse", "HEAD"),
+            "source_snapshot": state.source_snapshot(target, inputs.get("submodules", [])),
+            "resume": {"count": 0},
+        }
     else:
         if not args.run_id: parser.error(f"{args.action} requires --run-id")
         record = state.read_json(state.plugin_dir(target) / "runs" / f"{args.run_id}.json", None)
         if not isinstance(record, dict): raise SystemExit("run record not found")
         phase = args.phase or record.get("current_phase")
-        if args.action in {"phase-start", "advance"}:
+        if args.action == "resume":
+            if record.get("status") not in state.RESUMABLE_STATUSES:
+                raise SystemExit("run is not resumable")
+            next_phase = None
+            for candidate in record.get("phases", []):
+                status = record.get("phase_status", {}).get(candidate, {}).get("status")
+                if status == "succeeded":
+                    gate = validate(target, record["mode"], candidate, record.get("inputs", {}).get("submodules", []), record["id"])
+                    if not gate["ok"]:
+                        raise SystemExit(f"completed phase is no longer valid: {candidate}: {gate['reason']}")
+                elif next_phase is None:
+                    next_phase = candidate
+            if next_phase is None:
+                next_phase = "finalize"
+                prior = record.get("phase_status", {}).get(next_phase)
+                if prior and prior.get("status") == "succeeded":
+                    record.setdefault("phase_history", {}).setdefault(next_phase, []).append(prior)
+                    record["phase_status"].pop(next_phase, None)
+            else:
+                prior = record.get("phase_status", {}).get(next_phase)
+                if isinstance(prior, dict):
+                    record.setdefault("phase_history", {}).setdefault(next_phase, []).append(prior)
+                    record["phase_status"].pop(next_phase, None)
+            resume = record.setdefault("resume", {"count": 0})
+            resume["count"] = int(resume.get("count", 0)) + 1
+            resume["last_resumed_at"] = state.now()
+            resume["last_resumed_from_phase"] = next_phase
+            record.update({"status": "running", "current_phase": next_phase})
+            record.pop("ended_at", None); record.pop("failure", None)
+        elif args.action in {"phase-start", "advance"}:
             if phase not in record["phases"]: raise SystemExit("unknown phase")
             if args.action == "phase-start" and record["mode"] == "full" and phase == "phase_cleanup":
                 reset(target)
-            record["current_phase"] = phase; record["phase_status"][phase] = {"status": "running", "started_at": state.now()}
+            previous = record["phase_status"].get(phase, {})
+            attempt = int(previous.get("attempt", 0)) + 1
+            record["current_phase"] = phase; record["phase_status"][phase] = {"status": "running", "started_at": state.now(), "attempt": attempt}
         elif args.action == "phase-complete":
             if phase not in record["phases"]: raise SystemExit("unknown phase")
             gate = validate(target, record["mode"], phase, record.get("inputs", {}).get("submodules", []), record["id"])
@@ -58,7 +104,10 @@ def main():
             state.atomic_json(state.plugin_dir(target) / "baseline.json", {"schema_version": 3, "analysis_commit": commit, "observed_commit": commit, "observed_at": record["ended_at"], "source_snapshot": state.source_snapshot(target, record["inputs"].get("submodules", [])), "fingerprint": record["fingerprint"], "inputs": record["inputs"], "run_id": record["id"], "completed_at": record["ended_at"]})
         elif args.action == "fail": record.update({"status": "failed", "ended_at": state.now(), "failure": args.message})
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})
+    record["updated_at"] = state.now()
     save(target, record)
+    if args.action in {"resume", "phase-start", "phase-complete"}:
+        heartbeat(target, record["id"])
     if args.action == "complete":
         release(target, record["id"], "idle")
     elif args.action == "fail":

@@ -21,6 +21,7 @@ PHASES = {
     "full": ["preflight", "project_understanding", "phase_cleanup", "extraction", "call_graph", "specification", "verification", "bug_validation", "finalize"],
     "incremental": ["validate_baseline", "refresh_plan", "preserve_specs", "diff", "rebuild_graph", "select_scope", "update_specs", "verify_affected", "bug_validation", "finalize"],
 }
+RESUMABLE_STATUSES = {"running", "failed", "interrupted"}
 
 
 def now() -> str:
@@ -93,12 +94,16 @@ def resolve(project: Path, value: str | None) -> str | None:
 
 def fingerprint(project: Path, one_phase: bool, submodules: list[str], extra_edge: str | None, knowledge: list[str], config: dict | None = None) -> tuple[str, dict]:
     edge = resolve(project, extra_edge)
+    # A resume grace period controls lock recovery, not the meaning or scope of
+    # an analysis.  It must not invalidate baselines or interrupted runs.
+    fingerprint_config = dict(config or {})
+    fingerprint_config.pop("resume_grace_seconds", None)
     inputs = {
         "one_phase": bool(one_phase),
         "submodules": sorted(dict.fromkeys(submodules)),
         "extra_edge": {"path": edge, "sha256": content_hash(Path(edge)) if edge else None},
         "knowledge": [{"path": resolve(project, item), "sha256": file_hash(Path(resolve(project, item)))} for item in knowledge],
-        "config": config or {},
+        "config": fingerprint_config,
     }
     return hashlib.sha256(json.dumps(inputs, ensure_ascii=False, sort_keys=True).encode()).hexdigest(), inputs
 
@@ -137,6 +142,97 @@ def refresh_observed_commit(project: Path, saved: dict) -> dict:
         saved["observed_commit"] = current; saved["observed_at"] = now()
         atomic_json(plugin_dir(project) / "baseline.json", saved)
     return saved
+
+
+def run_path(project: Path, run_id: str) -> Path:
+    """Return a run-record path without permitting path traversal."""
+    if not isinstance(run_id, str) or not run_id or Path(run_id).name != run_id:
+        raise ValueError("invalid run id")
+    return plugin_dir(project) / "runs" / f"{run_id}.json"
+
+
+def run_record(project: Path, run_id: str) -> dict:
+    try:
+        value = read_json(run_path(project, run_id), {})
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def resumable_runs(project: Path) -> list[dict]:
+    """Return incomplete full/incremental runs, newest first."""
+    root = plugin_dir(project) / "runs"
+    records = []
+    if not root.is_dir():
+        return records
+    for path in root.glob("run-*.json"):
+        record = read_json(path, {})
+        if (
+            isinstance(record, dict)
+            and record.get("id") == path.stem
+            and record.get("mode") in PHASES
+            and record.get("status") in RESUMABLE_STATUSES
+        ):
+            records.append(record)
+    return sorted(records, key=lambda item: str(item.get("updated_at") or item.get("ended_at") or item.get("started_at") or ""), reverse=True)
+
+
+def first_incomplete_phase(record: dict) -> str | None:
+    phases = record.get("phases")
+    statuses = record.get("phase_status")
+    if not isinstance(phases, list) or not isinstance(statuses, dict):
+        return None
+    for phase in phases:
+        if statuses.get(phase, {}).get("status") != "succeeded":
+            return phase
+    # A run can fail after every gate passed but before pipeline completion.
+    return "finalize" if "finalize" in phases else None
+
+
+def inspect_resume(project: Path, run_id: str | None = None) -> dict:
+    """Check a prior run can continue without changing its analysis inputs.
+
+    Resume deliberately uses the run's saved configuration rather than current
+    defaults.  It is valid only when the selected source and auxiliary inputs
+    still have the exact content from the interrupted run.
+    """
+    record = run_record(project, run_id) if run_id else next(iter(resumable_runs(project)), {})
+    if not record:
+        return {"ok": False, "reason": "no interrupted FM-Agent full or incremental run was found"}
+    if record.get("status") not in RESUMABLE_STATUSES or record.get("mode") not in PHASES:
+        return {"ok": False, "reason": "selected run is not resumable", "run_id": record.get("id")}
+    inputs = record.get("inputs")
+    config = inputs.get("config") if isinstance(inputs, dict) else None
+    snapshot = record.get("source_snapshot")
+    if not isinstance(config, dict) or not isinstance(snapshot, dict):
+        return {"ok": False, "reason": "run predates resumable state snapshots", "run_id": record.get("id")}
+    submodules = inputs.get("submodules", [])
+    if not isinstance(submodules, list):
+        return {"ok": False, "reason": "run has invalid saved scope", "run_id": record.get("id")}
+    try:
+        fingerprint, _ = fingerprint_for_config(project, config)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        return {"ok": False, "reason": f"cannot validate saved analysis inputs: {exc}", "run_id": record.get("id")}
+    if fingerprint != record.get("fingerprint"):
+        return {"ok": False, "reason": "knowledge, supplemental edges, or saved analysis configuration changed", "run_id": record.get("id")}
+    if source_snapshot(project, submodules) != snapshot:
+        return {"ok": False, "reason": "supported source content changed since the interrupted run", "run_id": record.get("id")}
+    phase = first_incomplete_phase(record)
+    if not phase:
+        return {"ok": False, "reason": "run has no resumable phase", "run_id": record.get("id")}
+    return {"ok": True, "run": record, "run_id": record["id"], "mode": record["mode"], "resume_from_phase": phase, "config": config}
+
+
+def fingerprint_for_config(project: Path, config: dict) -> tuple[str, dict]:
+    """Rebuild a fingerprint from a run's immutable effective configuration."""
+    return fingerprint(
+        project,
+        bool(config.get("one_phase", False)),
+        list(config.get("submodules", [])),
+        config.get("extra_edge"),
+        list(config.get("knowledge", [])),
+        config,
+    )
 
 
 def preflight(project: Path) -> dict:

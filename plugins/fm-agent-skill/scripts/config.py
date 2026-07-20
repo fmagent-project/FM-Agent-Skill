@@ -9,7 +9,7 @@ from _common import project, state
 
 DEFAULTS = {
     "submodules": [], "one_phase": False, "isolate": False, "concurrency": 10,
-    "granularity": 40, "retries": 5, "lock_ttl_seconds": 7200,
+    "granularity": 40, "retries": 5, "lock_ttl_seconds": 7200, "resume_grace_seconds": 600,
     "codegraph_path": None, "call_graph_backend": "agent-static", "extra_edge": None, "knowledge": [],
 }
 
@@ -37,6 +37,7 @@ def main():
     parser.add_argument("--granularity", type=int)
     parser.add_argument("--retries", type=int)
     parser.add_argument("--lock-ttl-seconds", type=int)
+    parser.add_argument("--resume-grace-seconds", type=int)
     parser.add_argument("--codegraph-path")
     parser.add_argument("--call-graph-backend", choices=("agent-static", "codegraph"))
     parser.add_argument("--extra-edge")
@@ -46,7 +47,7 @@ def main():
         save(target, dict(DEFAULTS)); print(json.dumps(DEFAULTS, ensure_ascii=False, indent=2)); return
     config = load(target)
     if args.action == "set":
-        for key in ("concurrency", "granularity", "retries", "lock_ttl_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
+        for key in ("concurrency", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
             value = getattr(args, key)
             if value is not None: config[key] = value
         if args.submodules is not None: config["submodules"] = args.submodules
@@ -54,7 +55,7 @@ def main():
         for key in ("one_phase", "isolate"):
             value = getattr(args, key)
             if value is not None: config[key] = value == "true"
-        for key in ("concurrency", "granularity", "retries", "lock_ttl_seconds"):
+        for key in ("concurrency", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds"):
             if config[key] < 1: parser.error(f"{key.replace('_', '-')} must be positive")
         save(target, config)
     print(json.dumps(config, ensure_ascii=False, indent=2))

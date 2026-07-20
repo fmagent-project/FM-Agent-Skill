@@ -1,6 +1,6 @@
 ---
 name: help
-description: Explain how to use the FM-Agent plugin, including its available skills, automatic full/incremental/no-op selection, artifact locations, cross-client behavior, and current capabilities. Use when the user asks what FM-Agent can do, how to start or configure it, where results live, or why it selected a mode.
+description: Explain how to use the FM-Agent plugin, including its available skills, automatic full/incremental/no-op selection, explicit resume behavior, artifact locations, cross-client behavior, and current capabilities. Use when the user asks what FM-Agent can do, how to start, resume, or configure it, where results live, or why it selected a mode.
 ---
 
 # FM-Agent help
@@ -15,7 +15,7 @@ State that the plugin exposes these five skills:
 
 | Skill | Use it for |
 | --- | --- |
-| `run` | Analyze a Git project and automatically select full, incremental, or no-op. |
+| `run` | Analyze a Git project and automatically select full, incremental, or no-op; explicitly resume an interrupted full or incremental run. |
 | `install` | Check prerequisites and explain missing setup. |
 | `config` | Save non-secret defaults such as scope, retries, knowledge files, and supplemental edges. |
 | `diagnose` | Read the latest run state, summary, or a stored bug report without starting another analysis. |
@@ -46,6 +46,21 @@ A source-file change means an added, modified, or deleted file whose extension
 is supported by the plugin. Documentation-only changes do not start an
 incremental analysis.
 
+## Explain resume
+
+Explain that resume is explicit: the user asks to continue an interrupted
+analysis or supplies `--resume`. It preserves the run id and starts at the
+first incomplete stage. It is accepted only when supported-source content and
+the run's saved scope, knowledge files, supplemental edges, and other effective
+configuration still match. A commit containing identical source content does
+not prevent resume.
+
+When a lock has a fresh heartbeat, explain that another agent may still be
+working. Do not claim a takeover occurred unless the user explicitly confirmed
+it. A completed run, changed source, or changed analysis inputs requires a new
+ordinary analysis instead. Direct users to `diagnose` for the resumability
+state and reason.
+
 ## Explain output and boundaries
 
 Explain the artifact boundary:
@@ -70,7 +85,9 @@ rather than claiming exact graph precision.
 
 ## Explain the current capabilities
 
-Currently, the plugin supports a full `run_pipeline` and an automatic baseline-driven analysis workflow.
+Currently, the plugin supports a full `run_pipeline`, automatic baseline-driven
+full/incremental/no-op selection, and safe explicit resume of an interrupted
+full or incremental run.
 
 Scripts coordinate plugin state and validate artifacts.
 
