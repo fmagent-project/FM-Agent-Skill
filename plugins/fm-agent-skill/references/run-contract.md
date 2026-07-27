@@ -2,7 +2,7 @@
 
 `orchestrate.py inspect` performs the read-only mode decision before any
 CodeGraph action. `baseline.py` determines the mode. A valid baseline requires parsed phases,
-reachable successful commit, complete `[SPEC]` and `[INFO]` extracted artifacts,
+reachable successful commit, complete `.spec.json` and `.info.json` extracted artifacts,
 full verification output, and a matching scope fingerprint. Failure of any
 condition selects full analysis.
 

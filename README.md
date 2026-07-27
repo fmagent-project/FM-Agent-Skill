@@ -124,7 +124,7 @@ states that no analysis stage was required.
 If the interrupted run has a heartbeat newer than the configured ten-minute
 resume grace period, FM-Agent asks before taking over its lock. Confirm only
 after the earlier agent or task has stopped. A resumed run records its count,
-timestamp, and resumed phase in `fm_agent_plugin/runs/<run-id>.json`.
+timestamp, and resumed phase in `fm_agent_skill/runs/<run-id>.json`.
 
 ## Dispatch behavior
 
@@ -166,18 +166,56 @@ Artifacts are written to the target project, not the plugin installation:
 
 | Directory | Contents |
 | --- | --- |
-| `fm_agent/` | Function extraction, phase specifications, verification results, and FM-Agent-style bug-validation reports. |
-| `fm_agent_plugin/` | Baselines, run records, locks, control indexes, precision records, incremental decisions, and isolated probes. |
+| `fm_agent/` | Function copies plus `.spec.json` / `.info.json` sidecars, specification context, layers, verification results, and Bug Validator reports. |
+| `fm_agent_skill/` | Baselines, run records, locks, control indexes, precision records, incremental decisions, and isolated probes. |
 | `.codegraph/` | Generated CodeGraph index, rebuilt only during full or incremental runs when CodeGraph is available. |
+
+`fm_agent/` follows FM-Agent's analysis-workspace model. An extracted function
+is immutable source plus two sidecars, rather than source code annotated with
+generated comments:
+
+```text
+fm_agent/
+├── phases.json
+├── fm_agent_file_list.json
+├── extracted_functions/<source-path>/<function>.<ext>
+├── extracted_functions/<source-path>/<function>.<ext>.spec.json
+├── extracted_functions/<source-path>/<function>.<ext>.info.json
+├── spec_prompts/
+│   ├── system_prompt.md
+│   ├── domain_context/engine_overview.txt
+│   ├── domain_context/phase_XX_types.txt
+│   ├── domain_context/user_knowledge/       # only when supplied
+│   └── phase_XX_topdown_layers.json
+├── logic_verification_results/
+├── bug_validation/                           # only for direct MISMATCH probes
+├── incremental_updated_specs.json            # incremental runs only
+└── trace/events.jsonl
+```
+
+Each `.spec.json` contains exactly `signature`, `pre_condition`, and
+`post_condition`. Each `.info.json` contains `callees`, with the caller's
+expected contract for every in-scope callee. `fm_agent_file_list.json` and the
+plugin control index list only function source copies, never sidecars.
+
+`fm_agent_skill/` is deliberately separate from those analysis artifacts. It
+is the sole location for mutable orchestration data such as `config.json`, run
+records, locks, baselines, function hashes, incremental decisions, and
+isolated probe builds. It is not an FM-Agent analysis result.
+
+For an incremental run, the latest module/file-selection records and
+specification-update records remain in `fm_agent/`; previous verification and
+Bug Validator results are cleared before the new incremental run begins. This
+prevents reports from different analysis runs being presented as one result.
 
 Useful files include:
 
 ```text
 fm_agent/bug_validation/summary.json
 fm_agent/bug_validation/<function>.md
-fm_agent_plugin/runs/<run-id>.json
-fm_agent_plugin/baseline.json
-fm_agent_plugin/control/call_graph_precision.json
+fm_agent_skill/runs/<run-id>.json
+fm_agent_skill/baseline.json
+fm_agent_skill/control/call_graph_precision.json
 ```
 
 Add these generated directories to the target project's `.gitignore`; they are
@@ -186,7 +224,8 @@ analysis state and reports, not business source.
 ## Safety and recovery
 
 - The plugin does not modify business source files or write specification
-  comments back into them.
+  comments back into them. It also does not modify extracted function copies;
+  generated contracts are sidecars.
 - Each analysis owns a run lock. Completion, failure, or an explicit stop
   releases that lock while preserving its run record.
 - A full run clears only old derived artifacts; it does not remove business
@@ -215,11 +254,13 @@ Python environment:
 
 ```bash
 python3 tests/test_resume.py
+python3 tests/test_artifact_contract.py
 ```
 
 It simulates an interrupted full run, verifies that resume keeps its run id and
 continues after the last successful phase, verifies the fresh-lock takeover
-guard, and rejects resume after a supported source change.
+guard, and rejects resume after a supported source change. The artifact test
+checks sidecar validation, source/index separation, and incremental cleanup.
 
 ## Repository layout
 
@@ -282,7 +323,7 @@ resume 会保留原 run id，从第一个未完成阶段继续；只有源码内
 
 full、incremental 和 resume 都会在每个阶段前显示 run id 与“当前阶段/总阶段数”；resume 会先显示恢复位置，no-op 会明确说明没有执行分析阶段。
 
-若旧 run 的心跳仍在默认 10 分钟宽限期内，FM-Agent 会先询问是否接管锁。只有确认旧 task 已停止后才应同意接管。恢复次数、恢复时间和恢复阶段会记录在 `fm_agent_plugin/runs/<run-id>.json`。
+若旧 run 的心跳仍在默认 10 分钟宽限期内，FM-Agent 会先询问是否接管锁。只有确认旧 task 已停止后才应同意接管。恢复次数、恢复时间和恢复阶段会记录在 `fm_agent_skill/runs/<run-id>.json`。
 
 ## 运行方式与产物
 
@@ -291,7 +332,7 @@ full、incremental 和 resume 都会在每个阶段前显示 run id 与“当前
   CodeGraph。
 - CodeGraph 仅在 full 或 incremental 时自动重建；不可用时记录 `agent-static` 回退。
 - resume 不会重建已经完成且有效的调用图；若调用图阶段本身中断，则复用可读的同快照索引或按原后端重建。
-- `fm_agent/` 保存规约、验证和缺陷报告；`fm_agent_plugin/` 保存基线、运行记录和控制状态；
+- `fm_agent/` 保存函数副本、sidecar 规约、验证和缺陷报告；`fm_agent_skill/` 保存基线、运行记录和控制状态；
   `.codegraph/` 保存生成索引。建议将三者加入目标项目的 `.gitignore`。
 
 `analysis_commit` 表示当前分析结果对应的提交，`observed_commit` 表示最近一次确认源码快照

@@ -32,11 +32,11 @@ Read it through `codegraph.py export`; map its function/method nodes to the
 current source index by repository path and line range, and map
 `calls`/`instantiates` edges to those normalized function IDs. Record
 `backend: "codegraph"` and the index path in
-`fm_agent_plugin/control/call_graph_precision.json`. A
+`fm_agent_skill/control/call_graph_precision.json`. A
 rebuild failure fails this CodeGraph-selected run; do not silently substitute a
 different backend.
 
 If CodeGraph is unavailable, continue with the agent's static analysis. Record
 `backend: "agent-static"`, `precision: "best-effort"`, and the reason in
-`fm_agent_plugin/control/call_graph_precision.json`. Never label a fallback graph as
+`fm_agent_skill/control/call_graph_precision.json`. Never label a fallback graph as
 exact. Erlang/ELP is outside the current scope.

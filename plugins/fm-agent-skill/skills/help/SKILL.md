@@ -66,11 +66,13 @@ state and reason.
 Explain the artifact boundary:
 
 - `fm_agent/` contains FM-Agent-compatible analysis artifacts: phases, extracted
-  function copies, top-down layers, verification results, and any bug-validation output.
-- `fm_agent_plugin/` contains plugin control state: saved configuration, locks,
+  function copies with `.spec.json` / `.info.json` sidecars, specification context,
+  top-down layers, verification results, and any bug-validation output.
+- `fm_agent_skill/` contains plugin control state: saved configuration, locks,
   run records, baseline fingerprints, analysis indexes, graph precision, incremental
   decisions, and isolated probe builds.
-- Project business source is never annotated with `[SPEC]` or `[INFO]`.
+- Project business source and extracted source copies are never annotated with
+  generated specifications.
 
 Explain that the same `skills/`, `scripts/`, and `references/` are shared by
 Codex and Claude Code. Their manifests only provide discovery; each skill

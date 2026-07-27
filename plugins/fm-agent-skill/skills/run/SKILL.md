@@ -223,7 +223,8 @@ Use the resulting isolated build directory for the probe. Do not reuse a
 project `build/` directory or its `CMakeCache.txt`.
 
 Only after every phase gate succeeds may the agent call `pipeline.py complete`
-and release the lock as `idle`. Never modify business source with `[SPEC]` or
-`[INFO]` or expose raw full diffs in chat. Execute and describe only
+and release the lock as `idle`. Never modify business source or extracted
+function copies; write specifications only to their `.spec.json` and
+`.info.json` sidecars. Do not expose raw full diffs in chat. Execute and describe only
 capabilities documented by this plugin's shared skills and references; do not
 infer features from the original FM-Agent project.

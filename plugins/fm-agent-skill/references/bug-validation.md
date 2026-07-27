@@ -9,7 +9,7 @@ reports these fields faithfully and never upgrades an unconfirmed candidate.
 Only a direct `MISMATCH` is a candidate. A `DEPENDENCY_RISK` result means the
 caller must be reconsidered in incremental selection but must not create a
 duplicate bug report. For a CMake project, build every probe in
-`fm_agent_plugin/probes/<run-id>/<bug-id>/build/` through `probe_build.py`.
+`fm_agent_skill/probes/<run-id>/<bug-id>/build/` through `probe_build.py`.
 Never reuse the project's existing `build/` directory or its `CMakeCache.txt`.
 
 For an incremental run, consider only direct `MISMATCH` results whose

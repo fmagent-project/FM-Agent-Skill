@@ -48,7 +48,7 @@ def validate(target, mode, phase, submodules, run_id=None):
         "phase_cleanup": lambda: json_object(fm / "phases.json"),
         "extraction": lambda: bool(state.scoped_functions(target, submodules)),
         "call_graph": lambda: call_graph_ready(target),
-        "specification": lambda: state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
+        "specification": lambda: state.specification_context_ready(target)[0] and state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
         "verification": lambda: state.function_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
         "bug_validation": lambda: (not has_direct_mismatch(target, mode, run_id)) or bug_summary_for_run(target, run_id),
         "finalize": lambda: True,
@@ -58,7 +58,7 @@ def validate(target, mode, phase, submodules, run_id=None):
         "diff": lambda: (state.control_dir(target) / "diff.json").is_file(),
         "rebuild_graph": lambda: call_graph_ready(target),
         "select_scope": lambda: json_object(state.control_dir(target) / "incremental_decision.json"),
-        "update_specs": lambda: state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0] and (fm / "incremental_updated_specs.json").is_file(),
+        "update_specs": lambda: state.specification_context_ready(target)[0] and state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0] and (fm / "incremental_updated_specs.json").is_file(),
         "verify_affected": lambda: state.function_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
     }
     check = checks.get(phase)

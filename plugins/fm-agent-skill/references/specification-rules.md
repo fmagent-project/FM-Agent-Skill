@@ -29,33 +29,30 @@ numeric prefix followed by extra text is rejected. It is a direct mismatch if
 the implementation accepts that trailing text.
 
 Use a restrictive precondition only when every in-scope caller proves it with
-an explicit validation guard. Record that guard in `[INFO]`; otherwise make the
+an explicit validation guard. Record that guard in the function's `.info.json`
+callee expectation; otherwise make the
 failure behavior part of the current function's contract. Before completing
 the specification phase, challenge every precondition: "would this exclude a
 bad input that a caller can actually pass?" If yes, remove or weaken the
 precondition and specify the failure behavior instead.
 
-Use native single-line comments and exactly this layout in an extracted copy:
+Keep every extracted function copy byte-for-byte equivalent to its extracted
+source. Store its contract in paired sidecars instead:
 
 ```text
-<C> [SPEC]
-<C> Unit: <repo-relative path>
-<C> <function signature>
-<C> Pre-condition:
-<C>   - ...
-<C> Post-condition:
-<C>   - ...
-<C> [SPEC]
+// fm_agent/extracted_functions/.../parse.cpp
+<unchanged extracted source>
 
-<C> [INFO]
-<C> <callee contract or '(no callees)'>
-<C> [INFO]
+// fm_agent/extracted_functions/.../parse.cpp.spec.json
+{"signature":"parse(std::string_view)","pre_condition":"...","post_condition":"..."}
 
-<unchanged source>
+// fm_agent/extracted_functions/.../parse.cpp.info.json
+{"callees":[{"name":"...","signature":"...","pre_condition":"...","post_condition":"..."}]}
 ```
 
-`[INFO]` contains the caller's expected contracts of its callees, separated by
-`[SPLIT]` when needed. Prefer governing rules to enumerating helpers, branches,
-or particular members of a set. Contracts must be falsifiable and precise enough
-to verify but not so implementation-specific that deleting one branch merely
-changes the wording. Never edit business source.
+`info.json` contains the caller's expected contracts of its in-scope callees;
+use `{"callees":[]}` when there are none. Prefer governing rules to enumerating
+helpers, branches, or particular members of a set. Contracts must be
+falsifiable and precise enough to verify but not so implementation-specific
+that deleting one branch merely changes the wording. Never edit business source
+or its extracted copy.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 
 from _common import project, state
@@ -19,9 +18,32 @@ def reset(target):
     # Preserve phases.json: project_understanding/phase_cleanup owns it for this run.
     native = [fm / name for name in ("extracted_functions", "spec_prompts", "logic_verification_results", "bug_validation", "trace")]
     native += [fm / name for name in ("fm_agent_file_list.json", "version.log", "incremental_updated_specs.json")]
+    # Latest-run incremental records must not survive a clean full analysis.
+    for pattern in (
+        "select_relevant_modules.md", "relevant_modules.json",
+        "select_relevant_files_*.md", "relevant_files_*.json",
+        "spec_update_*.md", "spec_update_*.json",
+        "incremental_*.log", "workflow_*.md",
+    ):
+        native.extend(fm.glob(pattern))
     plugin = [control / name for name in ("analysis_index.json", "call_graph_precision.json", "preserved_specs.json", "diff.json", "incremental_decision.json")]
     for path in native + plugin: remove(path)
     return {"ok": True, "preserved": str(fm / "phases.json")}
+
+
+def reset_incremental_artifacts(target):
+    """Discard only latest-run results that would otherwise mix run histories."""
+    fm = state.fm_dir(target)
+    paths = [fm / name for name in ("logic_verification_results", "bug_validation", "incremental_updated_specs.json")]
+    for pattern in (
+        "select_relevant_modules.md", "relevant_modules.json",
+        "select_relevant_files_*.md", "relevant_files_*.json",
+        "spec_update_*.md", "spec_update_*.json", "incremental_*.log",
+    ):
+        paths.extend(fm.glob(pattern))
+    for path in paths:
+        remove(path)
+    return {"ok": True, "preserved": str(fm / "extracted_functions")}
 
 
 def main():

@@ -17,6 +17,9 @@ import uuid
 
 
 SOURCE_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".cu", ".go", ".h", ".hpp", ".java", ".js", ".jsx", ".py", ".rs", ".ts", ".tsx", ".ets", ".erl"}
+METADATA_SIDECAR_SUFFIXES = (".spec.json", ".info.json")
+SPEC_FIELDS = {"signature", "pre_condition", "post_condition"}
+CALLEE_FIELDS = {"name", "signature", "pre_condition", "post_condition"}
 PHASES = {
     "full": ["preflight", "project_understanding", "phase_cleanup", "extraction", "call_graph", "specification", "verification", "bug_validation", "finalize"],
     "incremental": ["validate_baseline", "refresh_plan", "preserve_specs", "diff", "rebuild_graph", "select_scope", "update_specs", "verify_affected", "bug_validation", "finalize"],
@@ -50,7 +53,7 @@ def git(project: Path, *args: str, check: bool = True) -> str:
 
 
 def plugin_dir(project: Path) -> Path:
-    return project / "fm_agent_plugin"
+    return project / "fm_agent_skill"
 
 
 def control_dir(project: Path) -> Path:
@@ -109,7 +112,7 @@ def fingerprint(project: Path, one_phase: bool, submodules: list[str], extra_edg
 
 
 def source_files(project: Path) -> list[Path]:
-    ignored = {".git", ".venv", "node_modules", "fm_agent", "fm_agent_plugin", ".codegraph", "build", "dist", "out", "target", "CMakeFiles"}
+    ignored = {".git", ".venv", "node_modules", "fm_agent", "fm_agent_skill", ".codegraph", "build", "dist", "out", "target", "CMakeFiles"}
     found = []
     for root, directories, files in os.walk(project):
         directories[:] = [name for name in directories if name not in ignored]
@@ -267,16 +270,60 @@ def scoped_functions(project: Path, submodules: list[str]) -> list[dict]:
 
 
 def stripped_source_hash(path: Path) -> str | None:
-    """Hash source after the leading generated SPEC/INFO headers, if present."""
-    try:
-        content = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    lines = content.splitlines(keepends=True)
-    markers = [i for i, line in enumerate(lines) if "[INFO]" in line]
-    if len(markers) >= 2:
-        content = "".join(lines[markers[1] + 1:]).lstrip("\r\n")
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+    """Return the exact hash of an extracted function source copy.
+
+    The old Skill embedded generated ``[SPEC]``/``[INFO]`` blocks in this
+    file.  Native FM-Agent keeps source immutable and stores those data in
+    sidecars, so no header stripping is valid any longer.  The legacy function
+    name remains to avoid breaking callers while their contracts migrate.
+    """
+    return file_hash(path)
+
+
+def is_metadata_sidecar(path: Path | str) -> bool:
+    return str(path).replace("\\", "/").endswith(METADATA_SIDECAR_SUFFIXES)
+
+
+def _valid_spec(data) -> bool:
+    return isinstance(data, dict) and set(data) == SPEC_FIELDS and all(isinstance(data[field], str) for field in SPEC_FIELDS)
+
+
+def _valid_info(data) -> bool:
+    if not isinstance(data, dict) or set(data) != {"callees"} or not isinstance(data["callees"], list):
+        return False
+    return all(
+        isinstance(callee, dict)
+        and set(callee) == CALLEE_FIELDS
+        and all(isinstance(callee[field], str) for field in CALLEE_FIELDS)
+        for callee in data["callees"]
+    )
+
+
+def sidecars_ready(artifact: Path) -> tuple[bool, str]:
+    """Validate FM-Agent's paired specification and call-information files."""
+    spec_path, info_path = Path(f"{artifact}.spec.json"), Path(f"{artifact}.info.json")
+    spec, info = read_json(spec_path, None), read_json(info_path, None)
+    if not _valid_spec(spec):
+        return False, f"missing or invalid spec sidecar: {spec_path.name}"
+    if not _valid_info(info):
+        return False, f"missing or invalid info sidecar: {info_path.name}"
+    return True, ""
+
+
+def _in_selected_scope(rel: str, submodules: list[str] | None) -> bool:
+    return not submodules or any(rel == item.rstrip("/") or rel.startswith(item.rstrip("/") + "/") for item in submodules)
+
+
+def _current_function_artifacts(extracted: Path, submodules: list[str] | None) -> set[str]:
+    if not extracted.is_dir():
+        return set()
+    return {
+        path.relative_to(extracted).as_posix()
+        for path in extracted.rglob("*")
+        if path.is_file()
+        and not is_metadata_sidecar(path)
+        and _in_selected_scope(path.relative_to(extracted).as_posix(), submodules)
+    }
 
 
 def specification_artifacts_ready(project: Path, functions: list[dict], submodules: list[str] | None = None) -> tuple[bool, str]:
@@ -299,16 +346,12 @@ def specification_artifacts_ready(project: Path, functions: list[dict], submodul
         expected_artifacts.add(normalized_rel)
         if not artifact.is_file():
             return False, f"missing extracted artifact for {function_id}"
-        text = artifact.read_text(encoding="utf-8", errors="replace")
-        if text.count("[SPEC]") < 2 or text.count("[INFO]") < 2:
-            return False, f"incomplete specification for {function_id}"
+        sidecars_ok, sidecars_reason = sidecars_ready(artifact)
+        if not sidecars_ok:
+            return False, f"incomplete specification for {function_id}: {sidecars_reason}"
         if stripped_source_hash(artifact) != source_hash:
             return False, f"source hash mismatch for {function_id}"
-
-    def in_selected_scope(rel: str) -> bool:
-        return not submodules or any(rel == item.rstrip("/") or rel.startswith(item.rstrip("/") + "/") for item in submodules)
-
-    actual_artifacts = {path.relative_to(extracted).as_posix() for path in extracted.rglob("*") if path.is_file() and in_selected_scope(path.relative_to(extracted).as_posix())} if extracted.is_dir() else set()
+    actual_artifacts = _current_function_artifacts(extracted, submodules)
     stale_artifacts = actual_artifacts - expected_artifacts
     if stale_artifacts:
         return False, f"stale extracted artifact: {sorted(stale_artifacts)[0]}"
@@ -331,9 +374,9 @@ def function_artifacts_ready(project: Path, functions: list[dict], submodules: l
         expected_results.add(Path(rel).with_suffix(".json").as_posix())
         if not artifact.is_file():
             return False, f"missing extracted artifact for {function_id}"
-        text = artifact.read_text(encoding="utf-8", errors="replace")
-        if text.count("[SPEC]") < 2 or text.count("[INFO]") < 2:
-            return False, f"incomplete specification for {function_id}"
+        sidecars_ok, sidecars_reason = sidecars_ready(artifact)
+        if not sidecars_ok:
+            return False, f"incomplete specification for {function_id}: {sidecars_reason}"
         if stripped_source_hash(artifact) != source_hash:
             return False, f"source hash mismatch for {function_id}"
         result_path = results / (str(Path(rel).with_suffix(".json")))
@@ -345,10 +388,8 @@ def function_artifacts_ready(project: Path, functions: list[dict], submodules: l
         result_hash = result.get("source_hash")
         if result_hash != source_hash:
             return False, f"verification hash mismatch for {function_id}"
-    def in_selected_scope(rel: str) -> bool:
-        return not submodules or any(rel == item.rstrip("/") or rel.startswith(item.rstrip("/") + "/") for item in submodules)
-    actual_artifacts = {path.relative_to(extracted).as_posix() for path in extracted.rglob("*") if path.is_file() and in_selected_scope(path.relative_to(extracted).as_posix())} if extracted.is_dir() else set()
-    actual_results = {path.relative_to(results).as_posix() for path in results.rglob("*.json") if in_selected_scope(path.relative_to(results).with_suffix("").as_posix())} if results.is_dir() else set()
+    actual_artifacts = _current_function_artifacts(extracted, submodules)
+    actual_results = {path.relative_to(results).as_posix() for path in results.rglob("*.json") if _in_selected_scope(path.relative_to(results).with_suffix("").as_posix(), submodules)} if results.is_dir() else set()
     stale_artifacts = actual_artifacts - expected_artifacts
     stale_results = actual_results - expected_results
     if stale_artifacts:
@@ -409,6 +450,25 @@ def phase_layers_ready(project: Path) -> tuple[bool, str]:
     return True, ""
 
 
+def specification_context_ready(project: Path) -> tuple[bool, str]:
+    """Validate the non-optional FM-Agent context used to write sidecars."""
+    phases_data = read_json(fm_dir(project) / "phases.json", {})
+    phases = phases_data.get("phases") if isinstance(phases_data, dict) else None
+    root = fm_dir(project) / "spec_prompts"
+    if not isinstance(phases, list) or not phases:
+        return False, "missing phases for specification context"
+    if not (root / "system_prompt.md").is_file():
+        return False, "missing specification system prompt"
+    domain = root / "domain_context"
+    if not (domain / "engine_overview.txt").is_file():
+        return False, "missing engine overview"
+    for index, phase in enumerate(phases, start=1):
+        number = _phase_number(phase, index)
+        if not (domain / f"phase_{number:02d}_types.txt").is_file():
+            return False, f"missing phase type context for phase {number}"
+    return True, ""
+
+
 def specs_ready(project: Path, submodules: list[str] | None = None) -> tuple[bool, str, int]:
     functions = scoped_functions(project, submodules or [])
     if not functions:
@@ -460,7 +520,7 @@ def untracked_sources(project: Path) -> list[str]:
 
 def is_supported_source_path(value: str) -> bool:
     path = value.replace("\\", "/")
-    return Path(path).suffix.lower() in SOURCE_EXTENSIONS and not path.startswith(("fm_agent/", "fm_agent_plugin/"))
+    return Path(path).suffix.lower() in SOURCE_EXTENSIONS and not path.startswith(("fm_agent/", "fm_agent_skill/"))
 
 
 def changed_since(project: Path, commit: str) -> bool:

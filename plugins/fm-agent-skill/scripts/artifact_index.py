@@ -17,14 +17,13 @@ def build(target, scope):
     root = state.fm_dir(target) / "extracted_functions"
     functions = []
     for path in sorted(root.rglob("*")) if root.is_dir() else []:
-        if not path.is_file(): continue
+        if not path.is_file() or state.is_metadata_sidecar(path): continue
         rel = path.relative_to(root).as_posix()
         if scope and not any(rel == item.rstrip("/") or rel.startswith(item.rstrip("/") + "/") for item in scope): continue
         # FM-Agent's artifact layout is stable enough to make this a deterministic
         # identity.  Extraction may replace these fields with richer parser metadata.
         function_id = Path(rel).with_suffix("").as_posix().replace("/", "::")
-        text = path.read_text(encoding="utf-8", errors="replace")
-        source_lines = text.split("[INFO]", 2)[-1].lstrip("\r\n").splitlines()
+        source_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         functions.append({"id": function_id, "path": rel, "artifact": rel, "line_start": 1, "line_end": max(1, len(source_lines)), "language": language_for(rel), "source_hash": state.stripped_source_hash(path), "scope": scope})
     data = {"schema_version": 1, "generated_at": state.now(), "functions": functions}
     state.atomic_json(state.control_dir(target) / "analysis_index.json", data)

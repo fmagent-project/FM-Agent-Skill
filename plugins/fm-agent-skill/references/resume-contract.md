@@ -48,7 +48,7 @@ function identity and source hash still match. Generate only missing, malformed,
 or hash-incompatible work:
 
 - extraction: current function copies and analysis-index entries;
-- specification: paired `[SPEC]` and `[INFO]` headers;
+- specification: paired schema-valid `.spec.json` and `.info.json` sidecars;
 - verification: schema-valid result records with matching function id and hash;
 - bug validation: current-run reports for unresolved direct `MISMATCH` items.
 

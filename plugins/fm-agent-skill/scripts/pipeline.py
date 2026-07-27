@@ -8,7 +8,7 @@ import uuid
 
 from _common import common_scope, project, scope, state
 from locking import heartbeat, release
-from reset_full_artifacts import reset
+from reset_full_artifacts import reset, reset_incremental_artifacts
 from stage_gate import validate
 
 
@@ -85,6 +85,8 @@ def main():
             if phase not in record["phases"]: raise SystemExit("unknown phase")
             if args.action == "phase-start" and record["mode"] == "full" and phase == "phase_cleanup":
                 reset(target)
+            if args.action == "phase-start" and record["mode"] == "incremental" and phase == "refresh_plan":
+                reset_incremental_artifacts(target)
             previous = record["phase_status"].get(phase, {})
             attempt = int(previous.get("attempt", 0)) + 1
             record["current_phase"] = phase; record["phase_status"][phase] = {"status": "running", "started_at": state.now(), "attempt": attempt}

@@ -3,7 +3,8 @@
 Use the current function's parsed `Pre-condition` as the first block's
 precondition. Split large functions at safe syntax boundaries (brace-aware for
 braced languages; conservative fallback otherwise). For each block, derive its
-postcondition from source, current precondition, `[INFO]`, and domain context;
+postcondition from source, current precondition, the current function's
+`.info.json` callee expectations, and domain context;
 pass that postcondition as the next block's precondition.
 
 Check each terminating block and the final block against the specification
