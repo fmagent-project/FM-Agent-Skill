@@ -27,23 +27,31 @@ def reset(target):
     ):
         native.extend(fm.glob(pattern))
     plugin = [control / name for name in ("analysis_index.json", "call_graph_precision.json", "preserved_specs.json", "diff.json", "incremental_decision.json")]
-    for path in native + plugin: remove(path)
+    for path in native + plugin + [state.plugin_dir(target) / "jobs", state.plugin_dir(target) / "probes", state.plugin_dir(target) / "runs"]: remove(path)
     return {"ok": True, "preserved": str(fm / "phases.json")}
 
 
 def reset_incremental_artifacts(target):
     """Discard only latest-run results that would otherwise mix run histories."""
     fm = state.fm_dir(target)
-    paths = [fm / name for name in ("logic_verification_results", "bug_validation", "incremental_updated_specs.json")]
+    paths = [fm / name for name in ("logic_verification_results", "bug_validation", "incremental_updated_specs.json", "trace")]
     for pattern in (
         "select_relevant_modules.md", "relevant_modules.json",
         "select_relevant_files_*.md", "relevant_files_*.json",
         "spec_update_*.md", "spec_update_*.json", "incremental_*.log",
     ):
         paths.extend(fm.glob(pattern))
+    paths += [state.plugin_dir(target) / "jobs", state.plugin_dir(target) / "probes", state.plugin_dir(target) / "runs"]
     for path in paths:
         remove(path)
     return {"ok": True, "preserved": str(fm / "extracted_functions")}
+
+
+def clear_transient(target):
+    """Discard current scheduler/probe work after a terminal successful analysis."""
+    for path in (state.plugin_dir(target) / "jobs", state.plugin_dir(target) / "probes"):
+        remove(path)
+    return {"ok": True}
 
 
 def main():

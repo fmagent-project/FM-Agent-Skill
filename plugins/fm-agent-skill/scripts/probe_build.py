@@ -40,7 +40,6 @@ def main() -> None:
         description="Configure and build a CMake probe without reusing the project's build cache."
     )
     parser.add_argument("--project", required=True)
-    parser.add_argument("--run-id", required=True)
     parser.add_argument("--bug-id", required=True)
     parser.add_argument("--target", help="optional CMake build target")
     args = parser.parse_args()
@@ -48,7 +47,7 @@ def main() -> None:
     if not (target / "CMakeLists.txt").is_file():
         parser.error("isolated CMake probes require CMakeLists.txt in --project")
 
-    build_dir = state.plugin_dir(target) / "probes" / safe_component(args.run_id) / safe_component(args.bug_id) / "build"
+    build_dir = state.plugin_dir(target) / "probes" / safe_component(args.bug_id) / "build"
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.parent.mkdir(parents=True, exist_ok=True)

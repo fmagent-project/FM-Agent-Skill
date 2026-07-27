@@ -25,8 +25,8 @@ no-op provenance refreshes, and explicit safe resume of interrupted analyses.
   business source content changes.
 - Skip repeated analysis when business source content is unchanged, even when
   the Git commit changes.
-- Continue an interrupted full or incremental run from its first incomplete
-  phase without creating a new run id or repeating completed work.
+- Continue the single interrupted full or incremental analysis from its first
+  incomplete phase without repeating completed work.
 - Use CodeGraph automatically for an exact call graph when it is available, or
   record an `agent-static` best-effort fallback when it is unavailable.
 - Run same-layer semantic workers concurrently with explicit write ownership,
@@ -107,7 +107,7 @@ for the worker mapping and recovery rules.
 ### Failure, retry, and recovery
 
 Each semantic unit has one durable job id at
-`fm_agent_skill/runs/<run-id>/jobs/<job-id>.json`. A timeout, rate limit,
+`fm_agent_skill/jobs/<job-id>.json`. A timeout, rate limit,
 Agent-tool failure, missing output, or invalid output becomes `retryable`; the
 Coordinator requeues the **same job** until its configured attempt limit is
 reached (five total attempts by default). It never creates a replacement job
@@ -126,6 +126,13 @@ independent job outputs. On resume, the Coordinator first reconciles stale
 `running` jobs: valid completed output is accepted, while incomplete output is
 made retryable in place when attempts remain.
 
+The plugin keeps no run history. A full analysis clears old generated FM-Agent
+artifacts, trace payloads, current jobs, and probe builds. An incremental
+analysis retains compatible sidecars but clears prior verification, bug, trace,
+job, and probe outputs. A successful terminal analysis removes current jobs and
+probes; `active.json` is overwritten by the next analysis and `baseline.json`
+is the only long-lived state.
+
 To continue a stopped analysis, make an explicit request instead of selecting a
 mode manually:
 
@@ -134,19 +141,19 @@ Continue the interrupted FM-Agent analysis.
 ```
 
 Resume requires unchanged supported-source content and unchanged saved analysis
-inputs. It retains the original run id, validates completed stages, and starts
-at the first incomplete one. It also reconciles per-worker job state before
+inputs. It validates completed stages and starts at the first incomplete one.
+It also reconciles per-worker job state before
 dispatching new work. A source-changing commit requires a normal new analysis;
 a commit with identical source content can still resume.
 
-FM-Agent displays the run id and a `Stage current/total` update before each
-analysis stage. A resumed run announces its recovery stage; a no-op explicitly
+FM-Agent displays a `Stage current/total` update before each analysis stage. A
+resumed analysis announces its recovery stage; a no-op explicitly
 states that no analysis stage was required.
 
 If the interrupted run has a heartbeat newer than the configured ten-minute
 resume grace period, FM-Agent asks before taking over its lock. Confirm only
-after the earlier agent or task has stopped. A resumed run records its count,
-timestamp, and resumed phase in `fm_agent_skill/runs/<run-id>.json`.
+after the earlier agent or task has stopped. Resume state is held only in the
+current `fm_agent_skill/active.json` record.
 
 ## Dispatch behavior
 
@@ -235,7 +242,7 @@ Useful files include:
 ```text
 fm_agent/bug_validation/summary.json
 fm_agent/bug_validation/<function>.md
-fm_agent_skill/runs/<run-id>.json
+fm_agent_skill/active.json
 fm_agent_skill/baseline.json
 fm_agent_skill/control/call_graph_precision.json
 ```
@@ -329,18 +336,17 @@ claude plugin install fm-agent-skill@fm-agent-skill
 继续执行刚才中断的 FM-Agent 分析。
 ```
 
-resume 会保留原 run id，从第一个未完成阶段继续；只有源码内容和原分析配置均未变化时才会执行。源码改变后应重新运行；仅提交了相同源码内容时仍可续跑。
+resume 会从当前分析的第一个未完成阶段继续；只有源码内容和原分析配置均未变化时才会执行。源码改变后应重新运行；仅提交了相同源码内容时仍可续跑。
 
-full、incremental 和 resume 都会在每个阶段前显示 run id 与“当前阶段/总阶段数”；resume 会先显示恢复位置，no-op 会明确说明没有执行分析阶段。
+full、incremental 和 resume 都会在每个阶段前显示“当前阶段/总阶段数”；resume 会先显示恢复位置，no-op 会明确说明没有执行分析阶段。
 
-若旧 run 的心跳仍在默认 10 分钟宽限期内，FM-Agent 会先询问是否接管锁。只有确认旧 task 已停止后才应同意接管。恢复次数、恢复时间和恢复阶段会记录在 `fm_agent_skill/runs/<run-id>.json`。
+若当前分析的心跳仍在默认 10 分钟宽限期内，FM-Agent 会先询问是否接管锁。只有确认旧 task 已停止后才应同意接管。恢复次数、恢复时间和恢复阶段会记录在 `fm_agent_skill/active.json`。
 
 ## Claude worker 调度、失败与恢复
 
 Coordinator 是 `fm_agent_skill/` 的唯一写入者。它按阶段串行推进，在同一调用层内最多并发
 `concurrency`（默认 10）个独立 Claude worker；join 后必须通过 gate 才能进入下一阶段。
-每个语义单元有固定 job id，保存在
-`fm_agent_skill/runs/<run-id>/jobs/<job-id>.json`。
+每个语义单元有固定 job id，保存在 `fm_agent_skill/jobs/<job-id>.json`。
 
 超时、限流、Agent 工具失败、缺失产物或无效产物会成为 `retryable`。Coordinator 会在**同一个
 job** 上有界重试，默认总尝试次数为 5，不创建替代 job，也不修改下游依赖。phase plan 和
@@ -351,6 +357,11 @@ domain context 每次失败后等待 10 秒；spec 阶段若已得到部分有�
 重试。Bug Validator 默认总共只尝试 1 次。`input`、`semantic` 和 `cancelled` 是终止失败：下游
 不会启动，当前阶段失败，但已有独立有效产物会保留。resume 前会先回收遗留 `running` job：产物有效
 则直接成功，否则在次数未耗尽时原地转为 `retryable`。
+
+插件不保留 run 历史。full 会清理旧的派生产物、trace payload、当前 jobs 与 probe；
+incremental 会保留兼容 sidecar，但清理旧 verification、bug、trace、jobs 与 probe。
+成功结束后会删除当前 jobs 与 probe；下一次分析覆盖 `active.json`，只有
+`baseline.json` 长期保留。
 
 ## 运行方式与产物
 

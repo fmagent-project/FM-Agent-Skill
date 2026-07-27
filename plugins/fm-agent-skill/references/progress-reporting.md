@@ -15,13 +15,13 @@ and phase identifier. Use this form before a phase:
 On a fresh full or incremental run, first announce:
 
 ```text
-[FM-Agent] Started <mode> analysis: <run id> (<total> stages).
+[FM-Agent] Started <mode> analysis (<total> stages).
 ```
 
 On resume, first announce the existing run and its recovery point:
 
 ```text
-[FM-Agent] Resuming <run id> from Stage <current>/<total>: <phase label> (<phase id>).
+[FM-Agent] Resuming from Stage <current>/<total>: <phase label> (<phase id>).
 ```
 
 After a successful phase, state that it completed, then announce the next

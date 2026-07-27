@@ -32,16 +32,15 @@ or failure to write/validate its assigned result is retryable. Bug Validator
 jobs default to one total attempt, matching FM-Agent's
 `bug_validation_max_retries = 1`.
 
-The job files live at
-`fm_agent_skill/runs/<run-id>/jobs/<job-id>.json`.  Workers must never write
-there. On resume call `scheduler.py recover` before `scheduler.py ready`. A
+The current job files live at `fm_agent_skill/jobs/<job-id>.json`. Workers must
+never write there. On resume call `scheduler.py recover` before `scheduler.py ready`. A
 stale `running` job with valid current outputs becomes `succeeded`; otherwise
 it becomes `retryable` when attempts remain. Requeue it in place. A final
 `failed` job blocks dependents and makes the Coordinator fail the phase, while
 valid completed independent work remains reusable.
 
 `required_outputs` are project-relative and may be only under `fm_agent/` or
-`fm_agent_skill/probes/<run-id>/`.  A worker receives only its assigned output
+`fm_agent_skill/probes/`. A worker receives only its assigned output
 paths.  Concurrent jobs may not share one output path; the Coordinator first
 partitions work by phase/layer/function/caller.
 

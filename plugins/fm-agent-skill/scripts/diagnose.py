@@ -13,7 +13,6 @@ result = {
     "summary": summary,
     "resume": {
         "available": bool(resumable.get("ok")),
-        "run_id": resumable.get("run_id"),
         "mode": resumable.get("mode"),
         "resume_from_phase": resumable.get("resume_from_phase"),
         "reason": resumable.get("reason"),

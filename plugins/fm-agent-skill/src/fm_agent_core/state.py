@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import uuid
 
 
 SOURCE_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".cu", ".go", ".h", ".hpp", ".java", ".js", ".jsx", ".py", ".rs", ".ts", ".tsx", ".ets", ".erl"}
@@ -147,37 +146,10 @@ def refresh_observed_commit(project: Path, saved: dict) -> dict:
     return saved
 
 
-def run_path(project: Path, run_id: str) -> Path:
-    """Return a run-record path without permitting path traversal."""
-    if not isinstance(run_id, str) or not run_id or Path(run_id).name != run_id:
-        raise ValueError("invalid run id")
-    return plugin_dir(project) / "runs" / f"{run_id}.json"
-
-
-def run_record(project: Path, run_id: str) -> dict:
-    try:
-        value = read_json(run_path(project, run_id), {})
-    except ValueError:
-        return {}
+def active_record(project: Path) -> dict:
+    """Return the sole current-analysis record, never a run history."""
+    value = read_json(plugin_dir(project) / "active.json", {})
     return value if isinstance(value, dict) else {}
-
-
-def resumable_runs(project: Path) -> list[dict]:
-    """Return incomplete full/incremental runs, newest first."""
-    root = plugin_dir(project) / "runs"
-    records = []
-    if not root.is_dir():
-        return records
-    for path in root.glob("run-*.json"):
-        record = read_json(path, {})
-        if (
-            isinstance(record, dict)
-            and record.get("id") == path.stem
-            and record.get("mode") in PHASES
-            and record.get("status") in RESUMABLE_STATUSES
-        ):
-            records.append(record)
-    return sorted(records, key=lambda item: str(item.get("updated_at") or item.get("ended_at") or item.get("started_at") or ""), reverse=True)
 
 
 def first_incomplete_phase(record: dict) -> str | None:
@@ -192,38 +164,38 @@ def first_incomplete_phase(record: dict) -> str | None:
     return "finalize" if "finalize" in phases else None
 
 
-def inspect_resume(project: Path, run_id: str | None = None) -> dict:
-    """Check a prior run can continue without changing its analysis inputs.
+def inspect_resume(project: Path) -> dict:
+    """Check the current interrupted analysis can continue unchanged.
 
     Resume deliberately uses the run's saved configuration rather than current
     defaults.  It is valid only when the selected source and auxiliary inputs
     still have the exact content from the interrupted run.
     """
-    record = run_record(project, run_id) if run_id else next(iter(resumable_runs(project)), {})
+    record = active_record(project)
     if not record:
-        return {"ok": False, "reason": "no interrupted FM-Agent full or incremental run was found"}
+        return {"ok": False, "reason": "no interrupted FM-Agent analysis was found"}
     if record.get("status") not in RESUMABLE_STATUSES or record.get("mode") not in PHASES:
-        return {"ok": False, "reason": "selected run is not resumable", "run_id": record.get("id")}
+        return {"ok": False, "reason": "current analysis is not resumable"}
     inputs = record.get("inputs")
     config = inputs.get("config") if isinstance(inputs, dict) else None
     snapshot = record.get("source_snapshot")
     if not isinstance(config, dict) or not isinstance(snapshot, dict):
-        return {"ok": False, "reason": "run predates resumable state snapshots", "run_id": record.get("id")}
+        return {"ok": False, "reason": "analysis predates resumable state snapshots"}
     submodules = inputs.get("submodules", [])
     if not isinstance(submodules, list):
-        return {"ok": False, "reason": "run has invalid saved scope", "run_id": record.get("id")}
+        return {"ok": False, "reason": "analysis has invalid saved scope"}
     try:
         fingerprint, _ = fingerprint_for_config(project, config)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        return {"ok": False, "reason": f"cannot validate saved analysis inputs: {exc}", "run_id": record.get("id")}
+        return {"ok": False, "reason": f"cannot validate saved analysis inputs: {exc}"}
     if fingerprint != record.get("fingerprint"):
-        return {"ok": False, "reason": "knowledge, supplemental edges, or saved analysis configuration changed", "run_id": record.get("id")}
+        return {"ok": False, "reason": "knowledge, supplemental edges, or saved analysis configuration changed"}
     if source_snapshot(project, submodules) != snapshot:
-        return {"ok": False, "reason": "supported source content changed since the interrupted run", "run_id": record.get("id")}
+        return {"ok": False, "reason": "supported source content changed since the interrupted analysis"}
     phase = first_incomplete_phase(record)
     if not phase:
-        return {"ok": False, "reason": "run has no resumable phase", "run_id": record.get("id")}
-    return {"ok": True, "run": record, "run_id": record["id"], "mode": record["mode"], "resume_from_phase": phase, "config": config}
+        return {"ok": False, "reason": "analysis has no resumable phase"}
+    return {"ok": True, "analysis": record, "mode": record["mode"], "resume_from_phase": phase, "config": config}
 
 
 def fingerprint_for_config(project: Path, config: dict) -> tuple[str, dict]:
@@ -500,15 +472,8 @@ def inspect_baseline(project: Path, config_fingerprint: str, submodules: list[st
     layers_ready, layers_reason = phase_layers_ready(project)
     if not layers_ready:
         return {"valid": False, "reason": layers_reason}
-    # ``active.json`` describes the most recent attempt.  A failed later
-    # attempt must not invalidate the successful run named by the baseline.
-    # The baseline's own run is the evidence whose completion matters here.
-    run_id = saved.get("run_id")
-    if not isinstance(run_id, str) or Path(run_id).name != run_id:
-        return {"valid": False, "reason": "missing successful baseline run"}
-    run = read_json(plugin_dir(project) / "runs" / f"{run_id}.json", {})
-    if run.get("status") != "succeeded" or run.get("mode") not in {"full", "incremental"}:
-        return {"valid": False, "reason": "baseline run did not complete"}
+    if not isinstance(saved.get("completed_at"), str):
+        return {"valid": False, "reason": "baseline lacks completion provenance"}
     if not isinstance(saved.get("source_snapshot"), dict):
         return {"valid": False, "reason": "missing source snapshot"}
     return {"valid": True, "commit": commit, "function_count": len(functions), "snapshot_changed": snapshot_changed(project, saved, submodules), "saved": saved}
@@ -528,10 +493,9 @@ def changed_since(project: Path, commit: str) -> bool:
     return any(is_supported_source_path(path) for path in tracked) or bool(untracked_sources(project))
 
 
-def build_intent(project: Path, base_commit: str, note: str, run_id: str | None = None) -> Path:
+def build_intent(project: Path, base_commit: str, note: str) -> Path:
     git(project, "cat-file", "-e", f"{base_commit}^{{commit}}")
-    run_id = run_id or f"run-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
-    path = plugin_dir(project) / "intents" / f"{run_id}.md"
+    path = plugin_dir(project) / "control" / "incremental_intent.md"
     commits = git(project, "log", "--format=%h %s", f"{base_commit}..HEAD", check=False).splitlines()
     files = git(project, "diff", "--name-status", base_commit, "--", check=False).splitlines()
     stat = git(project, "diff", "--stat", base_commit, "--", check=False)

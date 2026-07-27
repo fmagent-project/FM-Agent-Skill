@@ -7,6 +7,6 @@ disallowedTools: Agent
 
 Handle only the assigned direct `MISMATCH`. Follow the supplied Bug Validator
 contract and write only the assigned report/result, plus files in the assigned
-run-scoped `fm_agent_skill/probes/<run-id>/` directory. Never modify business
+`fm_agent_skill/probes/` directory. Never modify business
 source, specifications, unrelated artifacts, or scheduler state; do not spawn
 agents. Return JSON with `job_id`, `status`, `classification`, and outputs.

@@ -92,8 +92,8 @@ reply may the agent append `--take-over` below.
   --project "$PROJECT" [--take-over]
 ```
 
-Retain the returned `run_id`, `config`, and `resume_from_phase`. Execute only
-that run's first incomplete phase and later phases. Do not call ordinary
+Retain the returned `config` and `resume_from_phase`. Execute only the current
+analysis's first incomplete phase and later phases. Do not call ordinary
 `inspect` or `dispatch`, do not call `pipeline.py prepare`, and do not run a
 full cleanup when a previous `phase_cleanup` succeeded. Revalidate every
 function-level artifact in a resumed specification, verification, or bug
@@ -149,7 +149,7 @@ when absent.  For example, `review checkout changes --submodule backend
 --knowledge payments.md` must dispatch with note `review checkout changes`,
 `--submodule backend`, and `--knowledge payments.md` as distinct arguments.
 
-`dispatch` should return the inspected non-noop mode. Retain its `run_id`, emit
+`dispatch` should return the inspected non-noop mode. Retain its current-analysis state, emit
 the required `Started` status from
 [progress-reporting.md](../../references/progress-reporting.md), and execute only the selected
 pipeline. If `--codegraph` was selected, rebuild its generated index while the
@@ -201,7 +201,7 @@ Use the worker names exactly as follows: `fm-phase-plan-worker`, optional
 Pass each worker the project path, run id, job id, exact inputs, assigned
 outputs, and required reference files. A worker must return its concise JSON
 summary; workers cannot spawn other workers. The Coordinator is the only
-writer of `fm_agent_skill/runs/<run-id>/jobs/` and all other control state.
+writer of `fm_agent_skill/jobs/` and all other control state.
 
 For incremental planning, `fm-incremental-spec-plan-worker` returns an update
 plan in its response and writes no files. Record that response through
@@ -254,7 +254,7 @@ direct CMake candidate, first run:
 
 ```bash
 <python3> "$FM_AGENT_PLUGIN_ROOT/scripts/probe_build.py" \
-  --project "$PROJECT" --run-id "$RUN_ID" --bug-id "$BUG_ID"
+  --project "$PROJECT" --bug-id "$BUG_ID"
 ```
 
 Use the resulting isolated build directory for the probe. Do not reuse a

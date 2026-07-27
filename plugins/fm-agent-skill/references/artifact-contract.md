@@ -79,13 +79,13 @@ Finding/bug result records function identity, spec claim, implementation
 evidence, trigger/probe, output, and status `candidate`, `confirmed`,
 `rejected`, or `error`. `summary.json` counts each status.
 
-`fm_agent_skill/runs/<run-id>.json` records mode, phase status, inputs,
-fingerprint, timestamps, and terminal state. Resumable runs additionally retain
-their starting source snapshot, effective configuration, phase history, and
-resume count. `baseline.json` is written only by a successfully completed run.
+`fm_agent_skill/active.json` is the sole current-analysis record. It contains
+mode, phase status, inputs, fingerprint, timestamps, source snapshot, and
+resume count; it is overwritten by the next analysis. `baseline.json` is the
+only successful analysis state retained long-term.
 
-`fm_agent_skill/runs/<run-id>/jobs/<job-id>.json` records an individual
-Claude worker's type, dependencies, permitted/required outputs, attempt count,
-terminal status, and (for read-only incremental planning) returned plan. A
-worker never writes this manifest. Its Coordinator marks it complete only after
-the scheduler validates its artifacts.
+`fm_agent_skill/jobs/<job-id>.json` records a current Claude worker's type,
+dependencies, permitted/required outputs, attempt count, terminal status, and
+(for read-only incremental planning) returned plan. Workers never write these
+manifests. They are deleted after a successful terminal analysis, and retained
+only while a failed analysis remains resumable.

@@ -13,7 +13,7 @@ automatically written intent. Every selection must be recorded in
 6. `select_scope`: use `fm-select-relevant-modules-worker`, then `fm-select-relevant-files-worker`; include changed and propagated functions and exclude every other indexed function with a reason.
 7. `update_specs`: dispatch read-only `fm-incremental-spec-plan-worker` jobs for independent functions, serially apply accepted plans, then dispatch one `fm-reconcile-caller-info-worker` per caller frontier. Restore only hash-compatible sidecars and write native `fm_agent/incremental_updated_specs.json`.
 8. `verify_affected`: dispatch `fm-verify-function-worker` jobs for selected functions; use `DEPENDENCY_RISK` rather than converting a callee's direct mismatch into a caller mismatch.
-9. `bug_validation`: dispatch `fm-bug-validate-worker` only for selected direct `MISMATCH` candidates in an isolated probe build. When one exists, rebuild its probe under `fm_agent_skill/probes/<current-run-id>/`, then overwrite `fm_agent/bug_validation/summary.json` with `run_id` equal to the current incremental run. A summary from an earlier full or incremental run never satisfies this phase.
+9. `bug_validation`: dispatch `fm-bug-validate-worker` only for selected direct `MISMATCH` candidates in an isolated probe build. When one exists, rebuild its probe under `fm_agent_skill/probes/<bug-id>/`, then overwrite the current `fm_agent/bug_validation/summary.json`. Incremental cleanup removes any older summary before this phase.
 10. `finalize`: gate all retained and selected artifacts, then save the new baseline.
 
 Deleted functions must be absent from the plugin control analysis index, extracted artifacts,

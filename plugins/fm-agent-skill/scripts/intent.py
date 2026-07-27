@@ -6,6 +6,5 @@ parser = argparse.ArgumentParser(description="Create a restricted local incremen
 parser.add_argument("--project", required=True)
 parser.add_argument("--base", required=True)
 parser.add_argument("--note", default="")
-parser.add_argument("--run-id")
 args = parser.parse_args()
-print(state.build_intent(project(args), args.base, args.note, args.run_id))
+print(state.build_intent(project(args), args.base, args.note))
