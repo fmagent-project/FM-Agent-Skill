@@ -43,8 +43,9 @@ forward slashes.
   enabled.
 - `fm_agent_skill/control/analysis_index.json` is the plugin-owned function
   identity/hash inventory. Precision, incremental snapshots/diff/selection,
-  run records, locks, and probe-build results also belong in `fm_agent_skill/`,
-  never in `fm_agent/`.
+  run records, locks, scheduler jobs, and probe-build results also belong in
+  `fm_agent_skill/`, never in `fm_agent/`. Only the Coordinator and
+  deterministic scripts may write plugin-owned control state.
 
 ## Sidecar schemas
 
@@ -82,3 +83,9 @@ evidence, trigger/probe, output, and status `candidate`, `confirmed`,
 fingerprint, timestamps, and terminal state. Resumable runs additionally retain
 their starting source snapshot, effective configuration, phase history, and
 resume count. `baseline.json` is written only by a successfully completed run.
+
+`fm_agent_skill/runs/<run-id>/jobs/<job-id>.json` records an individual
+Claude worker's type, dependencies, permitted/required outputs, attempt count,
+terminal status, and (for read-only incremental planning) returned plan. A
+worker never writes this manifest. Its Coordinator marks it complete only after
+the scheduler validates its artifacts.

@@ -5,23 +5,25 @@ description: Run or safely resume an FM-Agent full, incremental, or no-op correc
 
 # FM-Agent analysis
 
-This is the sole public analysis entry point. The host coding agent is the
-plugin's equivalent of FM-Agent's original `main.py`: it coordinates local
-tools, reads the repository, writes specifications, and performs reasoning.
-Deterministic scripts own dispatch, locking, state transitions, and artifact
-validation. Never launch the original FM-Agent remote-LLM pipeline as a
-substitute for this workflow.
+This is the sole public analysis entry point. Semantic execution is currently
+**Claude Code only** and requires its `Agent` tool. If Agent is unavailable
+(including current Codex-only execution), explain that no Codex executor exists
+yet and do not simulate a successful semantic run. Never launch the original
+FM-Agent remote-LLM pipeline as a substitute.
+
+The Coordinator is the plugin's equivalent of FM-Agent's original `main.py`.
+It coordinates local deterministic tools and dispatches the named custom
+Claude workers; it never performs a worker's semantic task inline. Read
+[subagent-scheduler.md](../../references/subagent-scheduler.md) in addition to
+[agent-orchestration.md](../../references/agent-orchestration.md) before
+starting.
 
 Before invoking a script, read [runtime-path.md](../../references/runtime-path.md)
-and resolve `FM_AGENT_PLUGIN_ROOT`. This shared skill must work in both Codex
-and Claude Code; never use `CLAUDE_SKILL_DIR`.
-
-Read [agent-orchestration.md](../../references/agent-orchestration.md) before
-starting the selected pipeline.
+and resolve `FM_AGENT_PLUGIN_ROOT`; never use `CLAUDE_SKILL_DIR`.
 
 Read [progress-reporting.md](../../references/progress-reporting.md) before any
-stateful action. User-visible phase progress is mandatory in both Codex and
-Claude Code; do not rely on a client to infer it from tool output.
+stateful action. User-visible phase progress is mandatory; do not rely on a
+client to infer it from tool output.
 
 ## Public parameters
 
@@ -164,8 +166,12 @@ During graph construction, read its normalized function and edge data with:
 ```
 
 Before each phase emit the required `Stage current/total` status, then call
-`pipeline.py phase-start`; after producing its artifacts call
-`pipeline.py phase-complete`, then emit the short completion status. A failed
+`pipeline.py phase-start`. For every semantic unit, create its job manifest
+with `scheduler.py create`, call `scheduler.py start`, launch exactly the
+mapped named worker with the Agent tool, then call `scheduler.py complete`
+only after its outputs validate. Start at most configured `concurrency`
+background workers, join the jobs required by this phase, then call
+`pipeline.py phase-complete` and emit the short completion status. A failed
 gate means do not enter the next phase. On every exception, tool failure, or user-requested stop, run
 `pipeline.py fail`; it releases its owned lock while preserving artifacts and
 the final run record. `pipeline.py complete` likewise releases its owned lock.
@@ -186,6 +192,38 @@ whenever writing an artifact.
 For specification work, read [specification-rules.md](../../references/specification-rules.md).
 For verification, read [hoare-reasoning.md](../../references/hoare-reasoning.md).
 For every `MISMATCH`, read [bug-validation.md](../../references/bug-validation.md).
+
+Use the worker names exactly as follows: `fm-phase-plan-worker`, optional
+`fm-phase-refine-worker`, `fm-domain-context-worker`, `fm-spec-batch-worker`,
+`fm-verify-function-worker`, `fm-bug-validate-worker`,
+`fm-select-relevant-modules-worker`, `fm-select-relevant-files-worker`,
+`fm-incremental-spec-plan-worker`, and `fm-reconcile-caller-info-worker`.
+Pass each worker the project path, run id, job id, exact inputs, assigned
+outputs, and required reference files. A worker must return its concise JSON
+summary; workers cannot spawn other workers. The Coordinator is the only
+writer of `fm_agent_skill/runs/<run-id>/jobs/` and all other control state.
+
+For incremental planning, `fm-incremental-spec-plan-worker` returns an update
+plan in its response and writes no files. Record that response through
+`scheduler.py complete --result-json`, validate it, then serially apply sidecar
+updates before scheduling caller reconciliation. Do not let two active workers
+write the same artifact or report path.
+
+When an Agent call fails, classify it before scheduling anything downstream.
+`execution` (timeout, rate limit, tool crash), `output` (missing or invalid
+artifact), and `interrupted` are retryable. Call `scheduler.py fail` with that
+class; if its status is `retryable`, wait 10 seconds and call
+`scheduler.py retry`, retaining the same job id and stopping at configured
+`retries`. For a spec layer with any newly valid sidecar, retry remaining
+batches immediately; wait 10 seconds only when it made no progress. A retried
+spec batch preserves valid paired sidecars and repairs only incomplete assigned
+artifacts. A verification-level failure is a valid `ERROR` result, not a retry;
+retry only when the Agent or result artifact itself failed. Bug Validator jobs
+have one total attempt by default. `input`, `semantic`, and `cancelled`
+failures are terminal: leave dependents unscheduled and call `pipeline.py fail`.
+On resume call `scheduler.py recover` before `scheduler.py ready`; it retains a
+stale running job only if current outputs validate, otherwise requeues it in
+place when attempts remain.
 
 During `call_graph` or `rebuild_graph`, write one native top-down layer artifact
 for each phase in `fm_agent/phases.json`: `phase_01_topdown_layers.json`, then

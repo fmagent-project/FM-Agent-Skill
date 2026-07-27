@@ -6,7 +6,9 @@ description: View, update, and reset persistent FM-Agent analysis defaults for s
 # FM-Agent configuration
 
 Configuration lives at `fm_agent_skill/config.json` in the target repository.
-It holds defaults for submodules, one-phase and isolation policy, concurrency,
+It holds defaults for submodules, one-phase and isolation policy, Claude
+subagent executor, concurrency, specification batch size,
+Bug Validator attempt limit,
 granularity, retry count, lock TTL, resume grace period, the CodeGraph command and selected graph
 backend, extra-edge reference, and Markdown knowledge references. It never
 copies API keys or knowledge file contents.
@@ -18,7 +20,7 @@ both Codex and Claude Code; never use `CLAUDE_SKILL_DIR`.
 Use `config.py show`, `set`, or `reset`; for example:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/config.py" set --project "$PROJECT" --submodule src --concurrency 8 --granularity 40
+<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/config.py" set --project "$PROJECT" --submodule src --concurrency 8 --spec-batch-size 2 --granularity 40
 ```
 
 Validate an extra-edge file or directory before saving or using it:

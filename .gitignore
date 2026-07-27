@@ -3,3 +3,4 @@ __pycache__/
 fm_agent/
 fm_agent_plugin/
 .codegraph/
+tests/

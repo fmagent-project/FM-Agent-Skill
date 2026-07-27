@@ -9,6 +9,7 @@ from _common import project, state
 
 DEFAULTS = {
     "submodules": [], "one_phase": False, "isolate": False, "concurrency": 10,
+    "scheduler_executor": "claude-subagent", "spec_batch_size": 2, "bug_validation_max_attempts": 1,
     "granularity": 40, "retries": 5, "lock_ttl_seconds": 7200, "resume_grace_seconds": 600,
     "codegraph_path": None, "call_graph_backend": "agent-static", "extra_edge": None, "knowledge": [],
 }
@@ -34,6 +35,9 @@ def main():
     parser.add_argument("--one-phase", choices=("true", "false"))
     parser.add_argument("--isolate", choices=("true", "false"))
     parser.add_argument("--concurrency", type=int)
+    parser.add_argument("--scheduler-executor", choices=("claude-subagent",))
+    parser.add_argument("--spec-batch-size", type=int)
+    parser.add_argument("--bug-validation-max-attempts", type=int)
     parser.add_argument("--granularity", type=int)
     parser.add_argument("--retries", type=int)
     parser.add_argument("--lock-ttl-seconds", type=int)
@@ -47,7 +51,7 @@ def main():
         save(target, dict(DEFAULTS)); print(json.dumps(DEFAULTS, ensure_ascii=False, indent=2)); return
     config = load(target)
     if args.action == "set":
-        for key in ("concurrency", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
+        for key in ("concurrency", "scheduler_executor", "spec_batch_size", "bug_validation_max_attempts", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
             value = getattr(args, key)
             if value is not None: config[key] = value
         if args.submodules is not None: config["submodules"] = args.submodules
@@ -55,7 +59,7 @@ def main():
         for key in ("one_phase", "isolate"):
             value = getattr(args, key)
             if value is not None: config[key] = value == "true"
-        for key in ("concurrency", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds"):
+        for key in ("concurrency", "spec_batch_size", "bug_validation_max_attempts", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds"):
             if config[key] < 1: parser.error(f"{key.replace('_', '-')} must be positive")
         save(target, config)
     print(json.dumps(config, ensure_ascii=False, indent=2))

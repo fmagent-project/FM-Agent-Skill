@@ -2,12 +2,11 @@
 
 [English](#fm-agent-skill) | [简体中文](#中文说明)
 
-FM-Agent Skill is a correctness-analysis plugin for **Codex** and **Claude
-Code**. It follows the staged analysis ideas of
-[FM-Agent](https://github.com/fmagent-project/FM-Agent), while the active
-coding agent reads code, writes behavioral specifications, reasons about
-implementations, and validates candidate defects. Bundled deterministic tools
-manage state, locks, baselines, call-graph metadata, and artifact checks.
+FM-Agent Skill is a Claude Code correctness-analysis plugin following the
+staged analysis ideas of [FM-Agent](https://github.com/fmagent-project/FM-Agent).
+Its Coordinator uses deterministic tools for state and graphs, and dispatches
+the original FM-Agent semantic-worker boundaries as controlled Claude
+subagents. A Codex executor is planned but is not included in this release.
 
 The plugin runs in a Git working tree and does not modify business source code.
 The current release supports full analysis, automatic incremental analysis,
@@ -30,12 +29,14 @@ no-op provenance refreshes, and explicit safe resume of interrupted analyses.
   phase without creating a new run id or repeating completed work.
 - Use CodeGraph automatically for an exact call graph when it is available, or
   record an `agent-static` best-effort fallback when it is unavailable.
+- Run same-layer semantic workers concurrently with explicit write ownership,
+  persisted job state, same-job bounded retries, and phase gates.
 
 ## Prerequisites
 
 - The target must be a Git repository with a resolvable `HEAD`.
 - The target must contain at least one supported source file.
-- Install and sign in to either Codex or Claude Code.
+- Install and sign in to Claude Code with its `Agent` tool available.
 - CodeGraph is optional. When available, it is rebuilt automatically for a
   full or incremental analysis. The plugin does not install missing software;
   it records an `agent-static` fallback instead.
@@ -43,16 +44,6 @@ no-op provenance refreshes, and explicit safe resume of interrupted analyses.
 ## Installation
 
 Both marketplaces expose the plugin as `fm-agent-skill`.
-
-### Codex
-
-```bash
-codex plugin marketplace add fmagent-project/FM-Agent-Skill
-codex plugin add fm-agent-skill@fm-agent-skill
-```
-
-Start a new Codex task after installation or an update so the refreshed skills
-are loaded.
 
 ### Claude Code
 
@@ -65,8 +56,7 @@ Start a new Claude Code session after installation.
 
 ## Usage
 
-Open the Git project to analyze and make a natural-language request in either
-client:
+Open the Git project in Claude Code and make a natural-language request:
 
 ```text
 Use FM-Agent to analyze the current Git project.
@@ -78,10 +68,8 @@ Optionally state the change under review:
 Use FM-Agent to analyze the current Git project. Focus on changes to calculator input parsing.
 ```
 
-In Codex, invoke the `run` skill with the natural-language request above;
-installing a skill does not register a Codex slash command. The workflow accepts
-the following change note and options when a client exposes a command entry or
-passes them in the request:
+The workflow accepts the following change note and options when a command entry
+or natural-language request passes them in:
 
 ```text
 /fm-agent:run [change note]
@@ -105,6 +93,39 @@ passes them in the request:
 There is normally no need to select full or incremental mode manually. The
 plugin selects it from its baseline and source snapshot.
 
+## Claude worker scheduler
+
+The Coordinator is the only writer of `fm_agent_skill/` state. It maps phase
+planning, domain context, specification batches, function verification, Bug
+Validator, incremental selection, update planning, and caller reconciliation
+to named Claude subagents. It runs phases serially, dispatches independent
+same-layer jobs in parallel up to `concurrency` (default `10`), and joins them
+before each gate. Read
+[the scheduler contract](plugins/fm-agent-skill/references/subagent-scheduler.md)
+for the worker mapping and recovery rules.
+
+### Failure, retry, and recovery
+
+Each semantic unit has one durable job id at
+`fm_agent_skill/runs/<run-id>/jobs/<job-id>.json`. A timeout, rate limit,
+Agent-tool failure, missing output, or invalid output becomes `retryable`; the
+Coordinator requeues the **same job** until its configured attempt limit is
+reached (five total attempts by default). It never creates a replacement job
+or rewires dependent jobs.
+
+This follows FM-Agent's worker semantics: phase planning and domain context
+retry after ten seconds; a specification layer immediately retries only its
+remaining batches after partial progress, but waits ten seconds after no
+progress. Valid sidecars are retained. A verification reasoning problem is a
+valid `ERROR` result rather than a scheduling retry. Bug Validator has one
+total attempt by default, matching FM-Agent.
+
+`input`, `semantic`, and `cancelled` failures are terminal. They leave
+dependents unscheduled and fail the current phase without discarding valid,
+independent job outputs. On resume, the Coordinator first reconciles stale
+`running` jobs: valid completed output is accepted, while incomplete output is
+made retryable in place when attempts remain.
+
 To continue a stopped analysis, make an explicit request instead of selecting a
 mode manually:
 
@@ -114,8 +135,9 @@ Continue the interrupted FM-Agent analysis.
 
 Resume requires unchanged supported-source content and unchanged saved analysis
 inputs. It retains the original run id, validates completed stages, and starts
-at the first incomplete one. A source-changing commit requires a normal new
-analysis; a commit with identical source content can still resume.
+at the first incomplete one. It also reconciles per-worker job state before
+dispatching new work. A source-changing commit requires a normal new analysis;
+a commit with identical source content can still resume.
 
 FM-Agent displays the run id and a `Stage current/total` update before each
 analysis stage. A resumed run announces its recovery stage; a no-op explicitly
@@ -249,18 +271,9 @@ The following two-step workflow was verified with `cpp-demo`:
 This verifies that re-analysis is determined by source content rather than Git
 commit identity alone.
 
-The deterministic resume integration test can be run from WSL or a compatible
-Python environment:
-
-```bash
-python3 tests/test_resume.py
-python3 tests/test_artifact_contract.py
-```
-
-It simulates an interrupted full run, verifies that resume keeps its run id and
-continues after the last successful phase, verifies the fresh-lock takeover
-guard, and rejects resume after a supported source change. The artifact test
-checks sidecar validation, source/index separation, and incremental cleanup.
+The scheduler test covers retryable Agent failures, exhausted attempts,
+interrupted-job recovery, invalid outputs, and the single-attempt Bug Validator
+limit.
 
 ## Repository layout
 
@@ -269,8 +282,9 @@ checks sidecar validation, source/index separation, and incremental cleanup.
 ├── .agents/plugins/marketplace.json    # Codex marketplace manifest
 ├── .claude-plugin/marketplace.json     # Claude Code marketplace manifest
 └── plugins/fm-agent-skill/
+    ├── agents/                         # Claude workers mapped to FM-Agent LLM workers
     ├── skills/                         # run, help, install, diagnose, config
-    ├── scripts/                        # dispatch, state, locks, graph, validation
+    ├── scripts/                        # dispatch, scheduler, state, locks, graph, validation
     ├── src/fm_agent_core/              # shared state and artifact logic
     └── references/                     # workflow, specification, verification rules
 ```
@@ -283,9 +297,10 @@ Licensed under the [Apache License 2.0](LICENSE).
 
 # 中文说明
 
-FM-Agent Skill 是同时支持 Codex 和 Claude Code 的代码正确性分析插件。它借鉴
-[FM-Agent](https://github.com/fmagent-project/FM-Agent) 的分阶段分析思路：当前 Agent
-负责读代码、写行为规约、推理和验证；插件脚本负责基线、锁、状态、调用图记录和产物校验。
+FM-Agent Skill 是面向 Claude Code 的代码正确性分析插件。它借鉴
+[FM-Agent](https://github.com/fmagent-project/FM-Agent) 的分阶段分析思路：Coordinator
+负责基线、锁、状态、调用图和调度，Claude subagent 负责与原 FM-Agent LLM worker 一一对应的
+语义工作。Codex executor 仍在后续规划中，当前版本不应在 Codex 中宣称已完成语义分析。
 
 它在 Git 工作区中运行，不修改业务源码。当前支持完整分析、自动增量分析、no-op，以及安全地续跑中断分析。
 
@@ -294,10 +309,6 @@ FM-Agent Skill 是同时支持 Codex 和 Claude Code 的代码正确性分析插
 插件名为 `fm-agent-skill`。安装命令：
 
 ```bash
-# Codex
-codex plugin marketplace add fmagent-project/FM-Agent-Skill
-codex plugin add fm-agent-skill@fm-agent-skill
-
 # Claude Code
 claude plugin marketplace add fmagent-project/FM-Agent-Skill
 claude plugin install fm-agent-skill@fm-agent-skill
@@ -309,8 +320,7 @@ claude plugin install fm-agent-skill@fm-agent-skill
 使用 FM-Agent 分析当前 Git 项目
 ```
 
-Codex 使用上面的自然语言请求触发 `run` skill；安装 skill 不会自动注册 Codex 斜杠命令。
-支持命令入口的客户端或请求可附带修改说明、`--submodule`、`--knowledge`、`--extra-edge`、
+支持命令入口或自然语言请求附带修改说明、`--submodule`、`--knowledge`、`--extra-edge`、
 `--one-phase`、`--isolate` 或 `--resume`。
 
 如需续跑被中断的 full 或 incremental，请明确请求：
@@ -324,6 +334,23 @@ resume 会保留原 run id，从第一个未完成阶段继续；只有源码内
 full、incremental 和 resume 都会在每个阶段前显示 run id 与“当前阶段/总阶段数”；resume 会先显示恢复位置，no-op 会明确说明没有执行分析阶段。
 
 若旧 run 的心跳仍在默认 10 分钟宽限期内，FM-Agent 会先询问是否接管锁。只有确认旧 task 已停止后才应同意接管。恢复次数、恢复时间和恢复阶段会记录在 `fm_agent_skill/runs/<run-id>.json`。
+
+## Claude worker 调度、失败与恢复
+
+Coordinator 是 `fm_agent_skill/` 的唯一写入者。它按阶段串行推进，在同一调用层内最多并发
+`concurrency`（默认 10）个独立 Claude worker；join 后必须通过 gate 才能进入下一阶段。
+每个语义单元有固定 job id，保存在
+`fm_agent_skill/runs/<run-id>/jobs/<job-id>.json`。
+
+超时、限流、Agent 工具失败、缺失产物或无效产物会成为 `retryable`。Coordinator 会在**同一个
+job** 上有界重试，默认总尝试次数为 5，不创建替代 job，也不修改下游依赖。phase plan 和
+domain context 每次失败后等待 10 秒；spec 阶段若已得到部分有效 sidecar，会立即补跑剩余 batch，
+无任何进展才等待 10 秒。有效 sidecar 会保留。
+
+验证推理本身失败时应写出有效的 `ERROR` result，而不是重复调度；只有 Agent 或结果产物失败才
+重试。Bug Validator 默认总共只尝试 1 次。`input`、`semantic` 和 `cancelled` 是终止失败：下游
+不会启动，当前阶段失败，但已有独立有效产物会保留。resume 前会先回收遗留 `running` job：产物有效
+则直接成功，否则在次数未耗尽时原地转为 `retryable`。
 
 ## 运行方式与产物
 
@@ -343,4 +370,4 @@ full、incremental 和 resume 都会在每个阶段前显示 run id 与“当前
 在 `cpp-demo` 中已验证：首次对未提交源码执行 full 后，再提交完全相同的源码并运行，第二次会
 正确返回 no-op，保留分析基线与缺陷结论，并更新 `observed_commit`。
 
-可执行 `python3 tests/test_resume.py` 验证 resume 的状态机：模拟中断、同 run id 续跑、对新鲜锁的接管保护，以及源码变化后的拒绝恢复。
+调度测试覆盖：超时重试、次数耗尽、中断恢复、无效产物自动重试，以及 Bug Validator 的单次限制。
