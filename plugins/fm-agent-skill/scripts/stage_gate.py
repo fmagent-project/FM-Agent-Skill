@@ -25,6 +25,24 @@ def has_direct_mismatch(target, mode):
     return False
 
 
+def selected_functions(target):
+    decision = state.read_json(state.control_dir(target) / "incremental_decision.json", {})
+    included = decision.get("included", {})
+    if not isinstance(included, dict): return []
+    return [item for item in state.scoped_functions(target, []) if item.get("id") in included]
+
+
+def selection_ready(target):
+    decision = state.read_json(state.control_dir(target) / "incremental_decision.json", {})
+    return isinstance(decision.get("included"), dict) and isinstance(decision.get("removed_artifacts"), list)
+
+
+def baseline_ready(target, submodules):
+    active = state.active_record(target)
+    fingerprint = active.get("fingerprint") if isinstance(active, dict) else None
+    return isinstance(fingerprint, str) and state.inspect_baseline(target, fingerprint, submodules).get("valid", False)
+
+
 def bug_summary_current(target):
     summary = state.read_json(state.fm_dir(target) / "bug_validation" / "summary.json", {})
     return isinstance(summary, dict)
@@ -52,14 +70,14 @@ def validate(target, mode, phase, submodules):
         "verification": lambda: state.function_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
         "bug_validation": lambda: (not has_direct_mismatch(target, mode)) or bug_summary_current(target),
         "finalize": lambda: True,
-        "validate_baseline": lambda: state.scoped_functions(target, submodules) != [],
+        "validate_baseline": lambda: baseline_ready(target, submodules),
         "refresh_plan": lambda: json_object(fm / "phases.json"),
         "preserve_specs": lambda: (state.control_dir(target) / "preserved_specs.json").is_file(),
         "diff": lambda: (state.control_dir(target) / "diff.json").is_file(),
         "rebuild_graph": lambda: call_graph_ready(target),
-        "select_scope": lambda: json_object(state.control_dir(target) / "incremental_decision.json"),
+        "select_scope": lambda: selection_ready(target),
         "update_specs": lambda: state.specification_context_ready(target)[0] and state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0] and (fm / "incremental_updated_specs.json").is_file(),
-        "verify_affected": lambda: state.function_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
+        "verify_affected": lambda: selection_ready(target) and state.selected_verification_ready(target, selected_functions(target))[0],
     }
     check = checks.get(phase)
     if check is None: return {"ok": False, "reason": f"unknown {mode} phase: {phase}"}

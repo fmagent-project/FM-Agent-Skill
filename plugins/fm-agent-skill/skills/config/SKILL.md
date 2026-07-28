@@ -6,7 +6,7 @@ description: View, update, and reset persistent FM-Agent analysis defaults for s
 # FM-Agent configuration
 
 Configuration lives at `fm_agent_skill/config.json` in the target repository.
-It holds defaults for submodules, one-phase and isolation policy, Claude
+It holds defaults for submodules, one-phase and isolation policy, host
 subagent executor, concurrency, specification batch size,
 Bug Validator attempt limit,
 granularity, retry count, lock TTL, resume grace period, the CodeGraph command and selected graph

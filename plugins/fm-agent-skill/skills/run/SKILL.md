@@ -5,15 +5,16 @@ description: Run or safely resume an FM-Agent full, incremental, or no-op correc
 
 # FM-Agent analysis
 
-This is the sole public analysis entry point. Semantic execution is currently
-**Claude Code only** and requires its `Agent` tool. If Agent is unavailable
-(including current Codex-only execution), explain that no Codex executor exists
-yet and do not simulate a successful semantic run. Never launch the original
-FM-Agent remote-LLM pipeline as a substitute.
+This is the sole public analysis entry point. Execute it directly in Claude
+Code or Codex using that host's worker/subagent capability. Never launch,
+import, or shell out to the original FM-Agent project or its remote-LLM
+pipeline. The bundled deterministic executor and the host Coordinator together
+are this plugin's implementation.
 
 The Coordinator is the plugin's equivalent of FM-Agent's original `main.py`.
-It coordinates local deterministic tools and dispatches the named custom
-Claude workers; it never performs a worker's semantic task inline. Read
+It coordinates local deterministic tools and dispatches the named workers using
+the current host's subagent mechanism; it never performs a worker's semantic
+task inline. Read
 [subagent-scheduler.md](../../references/subagent-scheduler.md) in addition to
 [agent-orchestration.md](../../references/agent-orchestration.md) before
 starting.
@@ -38,9 +39,9 @@ it may pass the following arguments to the same workflow:
 ```
 
 Treat all text not matching an option as the change note. Resolve paths relative
-to the target repository. Do not invent `$PROJECT`, `$RUN_ID`, or a scope: the
-caller supplies the project and `orchestrate.py dispatch` returns the run id,
-merged configuration, and mode as JSON.
+to the target repository. Do not invent `$PROJECT` or a scope: the caller
+supplies the project and `orchestrate.py dispatch` returns the current analysis
+state, merged configuration, and mode as JSON.
 
 ## Resume, dispatch, and cleanup
 
@@ -68,8 +69,8 @@ acquires a lock, writes state, or rebuilds CodeGraph:
 
 ### Explicit resume
 
-`--resume` means continue the newest interrupted `full` or `incremental` run;
-it never creates a new run id and never changes its saved scope or
+`--resume` means continue the interrupted `full` or `incremental` analysis in
+`fm_agent_skill/active.json`; it never changes its saved scope or
 configuration. It is mutually exclusive with `--submodule`, `--knowledge`,
 `--extra-edge`, `--one-phase`, `--isolate`, and a new change note. Read
 [resume-contract.md](../../references/resume-contract.md), then inspect it
@@ -159,22 +160,32 @@ run lock is held before extraction or graph construction:
 <python3> "$FM_AGENT_PLUGIN_ROOT/scripts/codegraph.py" init --rebuild --project "$PROJECT"
 ```
 
-During graph construction, read its normalized function and edge data with:
+When `--isolate` is selected, replace `$PROJECT` for every subsequent command
+with the `project` path returned by `dispatch`. It is a temporary Git worktree
+containing the exact source snapshot and current artifacts. `pipeline.py
+complete` copies `fm_agent/` and `fm_agent_skill/` back to the original project
+and removes the temporary worktree. `pipeline.py fail` deliberately retains the
+snapshot and marker for resume. Invoke `--resume` against the original project;
+the marker redirects it to the retained snapshot.
+
+During graph construction, export its normalized function and edge data into
+plugin control state, then supply that file to `executor.py graph`:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/codegraph.py" export --project "$PROJECT"
+<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/codegraph.py" export --project "$PROJECT" \
+  --output "$PROJECT/fm_agent_skill/control/codegraph_export.json"
 ```
 
 Before each phase emit the required `Stage current/total` status, then call
 `pipeline.py phase-start`. For every semantic unit, create its job manifest
 with `scheduler.py create`, call `scheduler.py start`, launch exactly the
-mapped named worker with the Agent tool, then call `scheduler.py complete`
+mapped named worker with the host subagent mechanism, then call `scheduler.py complete`
 only after its outputs validate. Start at most configured `concurrency`
 background workers, join the jobs required by this phase, then call
 `pipeline.py phase-complete` and emit the short completion status. A failed
 gate means do not enter the next phase. On every exception, tool failure, or user-requested stop, run
 `pipeline.py fail`; it releases its owned lock while preserving artifacts and
-the final run record. `pipeline.py complete` likewise releases its owned lock.
+the active analysis state. `pipeline.py complete` likewise releases its owned lock.
 Report the last completed phase and the phase that did not finish.
 
 When `pipeline.py phase-start` begins `phase_cleanup` in a `full` run, it
@@ -195,10 +206,10 @@ For every `MISMATCH`, read [bug-validation.md](../../references/bug-validation.m
 
 Use the worker names exactly as follows: `fm-phase-plan-worker`, optional
 `fm-phase-refine-worker`, `fm-domain-context-worker`, `fm-spec-batch-worker`,
-`fm-verify-function-worker`, `fm-bug-validate-worker`,
+`fm-agent-static-edge-worker`, `fm-verify-function-worker`, `fm-bug-validate-worker`,
 `fm-select-relevant-modules-worker`, `fm-select-relevant-files-worker`,
 `fm-incremental-spec-plan-worker`, and `fm-reconcile-caller-info-worker`.
-Pass each worker the project path, run id, job id, exact inputs, assigned
+Pass each worker the project path, job id, exact inputs, assigned
 outputs, and required reference files. A worker must return its concise JSON
 summary; workers cannot spawn other workers. The Coordinator is the only
 writer of `fm_agent_skill/jobs/` and all other control state.
@@ -208,6 +219,21 @@ plan in its response and writes no files. Record that response through
 `scheduler.py complete --result-json`, validate it, then serially apply sidecar
 updates before scheduling caller reconciliation. Do not let two active workers
 write the same artifact or report path.
+
+After each selector record is validated, merge it only through:
+
+```bash
+<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/incremental.py" merge-selection \
+  --project "$PROJECT" --record "$SELECTOR_OUTPUT" --reason caller-propagation
+```
+
+Use `callee-propagation` or `spec-change` when that is the actual reason. Save
+an accepted incremental-plan response as JSON, then apply it only through:
+
+```bash
+<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/incremental.py" apply-plan \
+  --project "$PROJECT" --plan "$PLAN_JSON"
+```
 
 When an Agent call fails, classify it before scheduling anything downstream.
 `execution` (timeout, rate limit, tool crash), `output` (missing or invalid
@@ -229,22 +255,32 @@ During `call_graph` or `rebuild_graph`, write one native top-down layer artifact
 for each phase in `fm_agent/phases.json`: `phase_01_topdown_layers.json`, then
 `phase_02_topdown_layers.json`, and so on. A layer entry must retain its
 original repository-relative `source_file`, so it can be checked against its
-phase. Do not merge phases unless `--one-phase` was selected. Then write the
-plugin-control precision record. For CodeGraph use:
+phase. Do not merge phases unless `--one-phase` was selected. For CodeGraph,
+call `executor.py graph` with the exported control file; it records `exact`
+only after mapping exported nodes and edges to current extracted artifacts.
+Without that file, dispatch `fm-agent-static-edge-worker` first. It writes a
+candidate below `fm_agent/`; validate and promote it, then rerun graph:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/call_graph.py" record-precision \
-  --project "$PROJECT" --backend codegraph --precision exact \
-  --codegraph-index "$PROJECT/.codegraph/codegraph.db"
+<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" record-agent-edges \
+  --project "$PROJECT" --edges-file "$PROJECT/fm_agent/agent_static_edges_candidate.json"
+<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" graph --project "$PROJECT"
 ```
 
-For agent-static analysis, use `--backend agent-static --precision best-effort`
-and state the fallback reason with `--reason`.
+This records `agent-static/best-effort` and makes only validated edges available
+to layer construction and incremental propagation.
 
 Build the plugin control index after extraction:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/artifact_index.py" build --project "$PROJECT"
+<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" extract --project "$PROJECT"
+```
+
+Build native phase-layer artifacts after a valid `phases.json`:
+
+```bash
+<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" graph --project "$PROJECT" \
+  [--codegraph-export "$PROJECT/fm_agent_skill/control/codegraph_export.json"]
 ```
 
 Write `MISMATCH` only for a function's own specification violation. If the

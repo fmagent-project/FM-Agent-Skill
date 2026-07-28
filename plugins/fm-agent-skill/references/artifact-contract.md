@@ -43,7 +43,8 @@ forward slashes.
   enabled.
 - `fm_agent_skill/control/analysis_index.json` is the plugin-owned function
   identity/hash inventory. Precision, incremental snapshots/diff/selection,
-  run records, locks, scheduler jobs, and probe-build results also belong in
+  `graph_edges.json`, and validated `agent_static_edges.json` are plugin-owned
+  control artifacts. Active analysis state, locks, scheduler jobs, and probe-build results also belong in
   `fm_agent_skill/`, never in `fm_agent/`. Only the Coordinator and
   deterministic scripts may write plugin-owned control state.
 
@@ -82,9 +83,13 @@ evidence, trigger/probe, output, and status `candidate`, `confirmed`,
 `fm_agent_skill/active.json` is the sole current-analysis record. It contains
 mode, phase status, inputs, fingerprint, timestamps, source snapshot, and
 resume count; it is overwritten by the next analysis. `baseline.json` is the
-only successful analysis state retained long-term.
+only successful analysis state retained long-term. Its `analysis_commit` is
+Git provenance; `source_snapshot` records actual scoped source content;
+`file_hashes` records the same per-file hashes for conservative module/global
+change detection; function hashes in `analysis_index.json` decide individual
+sidecar and verification reuse.
 
-`fm_agent_skill/jobs/<job-id>.json` records a current Claude worker's type,
+`fm_agent_skill/jobs/<job-id>.json` records a current host worker's type,
 dependencies, permitted/required outputs, attempt count, terminal status, and
 (for read-only incremental planning) returned plan. Workers never write these
 manifests. They are deleted after a successful terminal analysis, and retained

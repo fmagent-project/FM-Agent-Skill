@@ -49,7 +49,7 @@ incremental analysis.
 ## Explain resume
 
 Explain that resume is explicit: the user asks to continue an interrupted
-analysis or supplies `--resume`. It preserves the run id and starts at the
+analysis or supplies `--resume`. It preserves the active analysis and starts at the
 first incomplete stage. It is accepted only when supported-source content and
 the run's saved scope, knowledge files, supplemental edges, and other effective
 configuration still match. A commit containing identical source content does
@@ -69,7 +69,7 @@ Explain the artifact boundary:
   function copies with `.spec.json` / `.info.json` sidecars, specification context,
   top-down layers, verification results, and any bug-validation output.
 - `fm_agent_skill/` contains plugin control state: saved configuration, locks,
-  run records, baseline fingerprints, analysis indexes, graph precision, incremental
+  active analysis state, baseline fingerprints, analysis indexes, graph precision, incremental
   decisions, and isolated probe builds.
 - Project business source and extracted source copies are never annotated with
   generated specifications.
@@ -86,7 +86,7 @@ not install unavailable software; it records a best-effort static call graph
 rather than claiming exact graph precision.
 
 Explain that full, incremental, and resumed analyses display a user-visible
-run id and stage progress. A resumed run announces the stage from which it is
+stage progress. A resumed analysis announces the stage from which it is
 continuing; no-op reports that no analysis stage ran.
 
 ## Explain the current capabilities

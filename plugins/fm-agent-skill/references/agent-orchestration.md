@@ -1,46 +1,38 @@
 # Agent orchestration model
 
-Semantic execution is currently **Claude Code only**.  It requires Claude's
-`Agent` tool and this plugin's custom workers in `agents/`.  Codex may install
-and inspect the shared deterministic artifacts, but must not claim that it ran
-the semantic pipeline until a Codex executor is implemented.
+The Skill runs directly in Claude Code or Codex. The host Coordinator uses that
+host's subagent capability and the shared job contract; it never invokes,
+imports, or shells out to the original FM-Agent.
 
-The Coordinator is the plugin equivalent of FM-Agent's original `main.py`.
-It owns `fm_agent_skill/` state, lock heartbeats, pipeline transitions, retry
-decisions, and user-visible status.  It uses deterministic scripts for
-extraction, index/graph construction, diffs, cleanup, gates, and finalization.
-Every original FM-Agent LLM/OpenCode worker is instead dispatched as its named
-Claude subagent according to [subagent-scheduler.md](subagent-scheduler.md).
-No worker may spawn another worker or write control state.
+The Coordinator is the Skill equivalent of `main.py`: it owns the current
+analysis state, lock heartbeat, deterministic scripts, phase gates, retries,
+and user-visible status. Named semantic workers do only their assigned
+analysis. They cannot spawn workers or write `fm_agent_skill/` control state.
 
-For every selected phase, call `pipeline.py phase-start`, create/start/join
-the required worker jobs, validate them through `scheduler.py complete`, and
-only then call `pipeline.py phase-complete`. Finish with `pipeline.py complete`;
-on failure use `pipeline.py fail`. The deterministic scripts own dispatch,
-locking, fingerprints, job validation, and artifact gates; they do not replace
-semantic analysis.
+For every phase, call `pipeline.py phase-start`, create/start/join required
+jobs, validate them through `scheduler.py complete`, then call
+`pipeline.py phase-complete`. On success use `pipeline.py complete`; on a
+terminal failure use `pipeline.py fail`. An explicit resume continues the
+single `active.json` analysis and its first incomplete phase; it does not make a
+new analysis identity or repeat valid work.
 
-For an explicit resume, first use `orchestrate.py resume-inspect` and then
-`orchestrate.py resume`; use its existing run id and first incomplete phase.
-Do not dispatch a new run or repeat earlier successful phases. Re-open the
-job manifests for that phase, retain only validated succeeded work, and use
-`scheduler.py ready` to continue independent pending jobs. Read
-[resume-contract.md](resume-contract.md) before re-entering an interrupted
-phase.
+## Deterministic executor
+
+Use `executor.py` for source extraction, native function inventory, layer
+artifacts, preserved-sidecar snapshots, restoration, diff, and initial
+selection. Without CodeGraph, dispatch `fm-agent-static-edge-worker` to write
+one candidate under `fm_agent/`, then call `executor.py record-agent-edges`.
+It validates artifact identities and promotes only valid edges into
+`fm_agent_skill/control/agent_static_edges.json`; rerun `executor.py graph`
+before specification or selection. `select` uses the resulting validated graph
+for deterministic caller/callee propagation. `agent-static` is always
+`best-effort`; only validated CodeGraph output may be recorded as `exact`.
 
 ## Optional CodeGraph backend
 
-Before dispatch, run `codegraph.py status`. If CodeGraph is available, use it
-automatically: every full or incremental run removes and regenerates the
-generated `<project>/.codegraph/` index. If unavailable, do not install
-software; use the static fallback.
-
-When available, dispatch with `--codegraph`, then rebuild through
-`codegraph.py init --rebuild` while the analysis lock is held. Read it with
-`codegraph.py export`, map function/method nodes and `calls`/`instantiates`
-edges to normalized IDs, and record `backend: "codegraph"` and the index path
-in `fm_agent_skill/control/call_graph_precision.json`.
-
-If unavailable, continue with Coordinator static analysis and record
-`backend: "agent-static"`, `precision: "best-effort"`, and the reason. Never
-label a fallback graph as exact. Erlang/ELP is outside the current scope.
+Run `codegraph.py status` before dispatch. When available, dispatch with
+`--codegraph`, rebuild using `codegraph.py init --rebuild`, export normalized
+functions/edges, and record `backend: codegraph` with its index path. If
+unavailable, do not install it: use host semantic analysis plus the deterministic
+inventory and record `backend: agent-static`, `precision: best-effort`, and a
+reason. Erlang/ELP is outside the current scope.

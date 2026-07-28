@@ -7,6 +7,7 @@ import json
 
 from _common import common_scope, project, scope, state
 from locking import heartbeat, release
+from isolation import sync as sync_isolation
 from reset_full_artifacts import clear_transient, reset, reset_incremental_artifacts
 from stage_gate import validate
 
@@ -72,13 +73,16 @@ def main():
             if missing: raise SystemExit("cannot complete: phase gates not passed: " + ", ".join(missing))
             record.update({"status": "succeeded", "ended_at": state.now()})
             commit = state.git(target, "rev-parse", "HEAD")
-            state.atomic_json(state.plugin_dir(target) / "baseline.json", {"schema_version": 3, "analysis_commit": commit, "observed_commit": commit, "observed_at": record["ended_at"], "source_snapshot": state.source_snapshot(target, record["inputs"].get("submodules", [])), "fingerprint": record["fingerprint"], "inputs": record["inputs"], "completed_at": record["ended_at"]})
+            file_hashes = state.source_snapshot(target, record["inputs"].get("submodules", []))
+            state.atomic_json(state.plugin_dir(target) / "baseline.json", {"schema_version": 3, "analysis_commit": commit, "observed_commit": commit, "observed_at": record["ended_at"], "source_snapshot": file_hashes, "file_hashes": file_hashes, "fingerprint": record["fingerprint"], "inputs": record["inputs"], "completed_at": record["ended_at"]})
         elif args.action == "fail": record.update({"status": "failed", "ended_at": state.now(), "failure": args.message})
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})
     record["updated_at"] = state.now(); save(target, record)
     if args.action in {"resume", "phase-start", "phase-complete"}: heartbeat(target)
-    if args.action == "complete": clear_transient(target); release(target, "idle")
-    elif args.action == "fail": release(target, "failed")
+    if args.action == "complete":
+        clear_transient(target); release(target, "idle"); sync_isolation(target)
+    elif args.action == "fail":
+        release(target, "failed")
     print(json.dumps(record, ensure_ascii=False, indent=2))
 
 

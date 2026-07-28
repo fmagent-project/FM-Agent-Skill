@@ -17,7 +17,7 @@ Read existing artifacts only:
 
 When no id is given, omit `--bug-id`. Summarize the latest mode, baseline commit,
 analysis scope, candidate count, confirmed count, and run state. State whether
-an interrupted run is resumable, its run id and next phase, or the exact reason
+an interrupted analysis is resumable, its next phase, or the exact reason
 resume is unavailable. For an individual report, distinguish `MISMATCH`, candidate, and confirmed states. Read
 [bug-validation.md](../../references/bug-validation.md) before interpreting or
 reporting a result.

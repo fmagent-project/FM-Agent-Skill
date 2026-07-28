@@ -120,6 +120,7 @@ def main() -> None:
     parser.add_argument("action", choices=("status", "init", "export"))
     parser.add_argument("--project", required=True)
     parser.add_argument("--command", help="CodeGraph executable path or command; overrides saved configuration")
+    parser.add_argument("--output", help="write an exported index JSON document to this path")
     parser.add_argument(
         "--rebuild", action="store_true",
         help="remove the existing generated .codegraph directory before initialization",
@@ -129,6 +130,10 @@ def main() -> None:
     if args.action == "status": code, result = 0, status(target, args.command)
     elif args.action == "init": code, result = initialize(target, args.command, args.rebuild)
     else: code, result = export_index(target)
+    if args.output:
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     raise SystemExit(code)
 

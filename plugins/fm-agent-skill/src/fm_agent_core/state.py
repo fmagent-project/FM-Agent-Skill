@@ -17,6 +17,7 @@ import subprocess
 
 SOURCE_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".cu", ".go", ".h", ".hpp", ".java", ".js", ".jsx", ".py", ".rs", ".ts", ".tsx", ".ets", ".erl"}
 METADATA_SIDECAR_SUFFIXES = (".spec.json", ".info.json")
+VERDICTS = {"MATCH", "MISMATCH", "DEPENDENCY_RISK", "ERROR"}
 SPEC_FIELDS = {"signature", "pre_condition", "post_condition"}
 CALLEE_FIELDS = {"name", "signature", "pre_condition", "post_condition"}
 PHASES = {
@@ -353,7 +354,7 @@ def function_artifacts_ready(project: Path, functions: list[dict], submodules: l
             return False, f"source hash mismatch for {function_id}"
         result_path = results / (str(Path(rel).with_suffix(".json")))
         result = read_json(result_path, None)
-        if not isinstance(result, dict) or result.get("verdict") not in {"MATCH", "MISMATCH", "DEPENDENCY_RISK", "ERROR"}:
+        if not isinstance(result, dict) or result.get("verdict") not in VERDICTS:
             return False, f"missing or invalid verification result for {function_id}"
         if result.get("function_id") != function_id:
             return False, f"verification function identity mismatch for {function_id}"
@@ -368,6 +369,19 @@ def function_artifacts_ready(project: Path, functions: list[dict], submodules: l
         return False, f"stale extracted artifact: {sorted(stale_artifacts)[0]}"
     if stale_results:
         return False, f"stale verification result: {sorted(stale_results)[0]}"
+    return True, ""
+
+
+def selected_verification_ready(project: Path, functions: list[dict]) -> tuple[bool, str]:
+    """Validate only the current incremental selection without requiring a full rerun."""
+    results = fm_dir(project) / "logic_verification_results"
+    for item in functions:
+        rel, function_id, source_hash = item.get("artifact"), item.get("id"), item.get("source_hash")
+        if not all(isinstance(value, str) for value in (rel, function_id, source_hash)):
+            return False, "selected function lacks artifact identity"
+        result = read_json(results / Path(rel).with_suffix(".json"), {})
+        if result.get("function_id") != function_id or result.get("source_hash") != source_hash or result.get("verdict") not in VERDICTS:
+            return False, f"missing or stale selected verification result for {function_id}"
     return True, ""
 
 
@@ -476,6 +490,8 @@ def inspect_baseline(project: Path, config_fingerprint: str, submodules: list[st
         return {"valid": False, "reason": "baseline lacks completion provenance"}
     if not isinstance(saved.get("source_snapshot"), dict):
         return {"valid": False, "reason": "missing source snapshot"}
+    if not isinstance(saved.get("file_hashes"), dict):
+        return {"valid": False, "reason": "missing per-file baseline hashes"}
     return {"valid": True, "commit": commit, "function_count": len(functions), "snapshot_changed": snapshot_changed(project, saved, submodules), "saved": saved}
 
 

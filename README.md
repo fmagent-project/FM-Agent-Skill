@@ -2,11 +2,12 @@
 
 [English](#fm-agent-skill) | [简体中文](#中文说明)
 
-FM-Agent Skill is a Claude Code correctness-analysis plugin following the
+FM-Agent Skill is a Claude Code and Codex correctness-analysis plugin following the
 staged analysis ideas of [FM-Agent](https://github.com/fmagent-project/FM-Agent).
-Its Coordinator uses deterministic tools for state and graphs, and dispatches
-the original FM-Agent semantic-worker boundaries as controlled Claude
-subagents. A Codex executor is planned but is not included in this release.
+Its host Coordinator uses deterministic tools for state and graphs, and
+dispatches the original FM-Agent semantic-worker boundaries as controlled host
+subagents. It is a direct implementation: it never launches or imports the
+original FM-Agent pipeline.
 
 The plugin runs in a Git working tree and does not modify business source code.
 The current release supports full analysis, automatic incremental analysis,
@@ -36,7 +37,7 @@ no-op provenance refreshes, and explicit safe resume of interrupted analyses.
 
 - The target must be a Git repository with a resolvable `HEAD`.
 - The target must contain at least one supported source file.
-- Install and sign in to Claude Code with its `Agent` tool available.
+- Use Claude Code or Codex with its subagent capability available.
 - CodeGraph is optional. When available, it is rebuilt automatically for a
   full or incremental analysis. The plugin does not install missing software;
   it records an `agent-static` fallback instead.
@@ -56,7 +57,7 @@ Start a new Claude Code session after installation.
 
 ## Usage
 
-Open the Git project in Claude Code and make a natural-language request:
+Open the Git project in Claude Code or Codex and make a natural-language request:
 
 ```text
 Use FM-Agent to analyze the current Git project.
@@ -88,17 +89,17 @@ or natural-language request passes them in:
 | `--extra-edge` | Add static call-graph edges. |
 | `--one-phase` | Generate specifications in one phase. |
 | `--isolate` | Request analysis in an isolated Git worktree. |
-| `--resume` | Explicitly continue the newest eligible interrupted full or incremental run. It cannot be combined with a new note or configuration options. |
+| `--resume` | Explicitly continue the eligible interrupted full or incremental analysis. It cannot be combined with a new note or configuration options. |
 
 There is normally no need to select full or incremental mode manually. The
 plugin selects it from its baseline and source snapshot.
 
-## Claude worker scheduler
+## Host worker scheduler
 
 The Coordinator is the only writer of `fm_agent_skill/` state. It maps phase
 planning, domain context, specification batches, function verification, Bug
 Validator, incremental selection, update planning, and caller reconciliation
-to named Claude subagents. It runs phases serially, dispatches independent
+to named host subagents. It runs phases serially, dispatches independent
 same-layer jobs in parallel up to `concurrency` (default `10`), and joins them
 before each gate. Read
 [the scheduler contract](plugins/fm-agent-skill/references/subagent-scheduler.md)
@@ -128,8 +129,9 @@ made retryable in place when attempts remain.
 
 The plugin keeps no run history. A full analysis clears old generated FM-Agent
 artifacts, trace payloads, current jobs, and probe builds. An incremental
-analysis retains compatible sidecars but clears prior verification, bug, trace,
-job, and probe outputs. A successful terminal analysis removes current jobs and
+analysis retains compatible sidecars and hash-compatible unchanged verification
+results, removes changed/removed results, and clears prior bug, trace, job, and
+probe outputs. A successful terminal analysis removes current jobs and
 probes; `active.json` is overwritten by the next analysis and `baseline.json`
 is the only long-lived state.
 
@@ -180,8 +182,8 @@ CodeGraph is used only for a full or incremental analysis. When it is
 available, the plugin automatically removes and rebuilds
 `$PROJECT/.codegraph/`; no separate authorization is requested.
 
-- Available and rebuilt successfully: call-graph precision is recorded as
-  `exact`.
+- Available, rebuilt, and mapped to current extracted artifacts: call-graph
+  precision is recorded as `exact`.
 - Unavailable: `agent-static` is used with `best-effort` precision and a
   fallback reason.
 - No-op: `.codegraph/` is not touched.
@@ -196,7 +198,7 @@ Artifacts are written to the target project, not the plugin installation:
 | Directory | Contents |
 | --- | --- |
 | `fm_agent/` | Function copies plus `.spec.json` / `.info.json` sidecars, specification context, layers, verification results, and Bug Validator reports. |
-| `fm_agent_skill/` | Baselines, run records, locks, control indexes, precision records, incremental decisions, and isolated probes. |
+| `fm_agent_skill/` | Baselines, the current active analysis, locks, control indexes, precision records, incremental decisions, and isolated probes. |
 | `.codegraph/` | Generated CodeGraph index, rebuilt only during full or incremental runs when CodeGraph is available. |
 
 `fm_agent/` follows FM-Agent's analysis-workspace model. An extracted function
@@ -228,14 +230,15 @@ expected contract for every in-scope callee. `fm_agent_file_list.json` and the
 plugin control index list only function source copies, never sidecars.
 
 `fm_agent_skill/` is deliberately separate from those analysis artifacts. It
-is the sole location for mutable orchestration data such as `config.json`, run
-records, locks, baselines, function hashes, incremental decisions, and
+is the sole location for mutable orchestration data such as `config.json`, the
+current analysis, locks, baselines, function hashes, incremental decisions, and
 isolated probe builds. It is not an FM-Agent analysis result.
 
 For an incremental run, the latest module/file-selection records and
-specification-update records remain in `fm_agent/`; previous verification and
-Bug Validator results are cleared before the new incremental run begins. This
-prevents reports from different analysis runs being presented as one result.
+specification-update records remain in `fm_agent/`; only verification results
+for changed or removed functions and prior Bug Validator results are cleared.
+This preserves a complete, hash-checked baseline without presenting old bug
+reports as new findings.
 
 Useful files include:
 
@@ -255,8 +258,8 @@ analysis state and reports, not business source.
 - The plugin does not modify business source files or write specification
   comments back into them. It also does not modify extracted function copies;
   generated contracts are sidecars.
-- Each analysis owns a run lock. Completion, failure, or an explicit stop
-  releases that lock while preserving its run record.
+- Each analysis owns a current-workspace lock. Completion, failure, or an
+  explicit stop releases it while preserving `active.json` for resume.
 - A full run clears only old derived artifacts; it does not remove business
   source or the current phase definition.
 - An incremental run preserves unaffected specifications and revalidates direct
@@ -264,6 +267,9 @@ analysis state and reports, not business source.
 - Resume is explicit and validates the original source snapshot and analysis
   configuration. A fresh lock heartbeat is treated as a potentially active
   analysis; lock takeover requires an explicit user confirmation.
+- `--isolate` runs the analysis in one temporary Git worktree and copies only
+  `fm_agent/` and `fm_agent_skill/` back on successful completion. A failed or
+  stopped isolated analysis keeps that one snapshot until resume, then removes it.
 
 ## Verified workflow
 
@@ -289,7 +295,7 @@ limit.
 ├── .agents/plugins/marketplace.json    # Codex marketplace manifest
 ├── .claude-plugin/marketplace.json     # Claude Code marketplace manifest
 └── plugins/fm-agent-skill/
-    ├── agents/                         # Claude workers mapped to FM-Agent LLM workers
+    ├── agents/                         # Host workers mapped to FM-Agent LLM workers
     ├── skills/                         # run, help, install, diagnose, config
     ├── scripts/                        # dispatch, scheduler, state, locks, graph, validation
     ├── src/fm_agent_core/              # shared state and artifact logic

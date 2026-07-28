@@ -5,8 +5,8 @@ status before every `pipeline.py phase-start` call and after every successful
 `phase-complete` call. Do not replace this with raw script JSON or detailed
 internal reasoning.
 
-Use the user's language for surrounding text, while retaining the mode, run id,
-and phase identifier. Use this form before a phase:
+Use the user's language for surrounding text, while retaining the mode and
+phase identifier. Use this form before a phase:
 
 ```text
 [FM-Agent] Stage <current>/<total>: <phase label> (<phase id>)

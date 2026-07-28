@@ -26,22 +26,26 @@ def reset(target):
         "incremental_*.log", "workflow_*.md",
     ):
         native.extend(fm.glob(pattern))
-    plugin = [control / name for name in ("analysis_index.json", "call_graph_precision.json", "preserved_specs.json", "diff.json", "incremental_decision.json")]
+    plugin = [control / name for name in ("analysis_index.json", "call_graph_precision.json", "graph_edges.json", "agent_static_edges.json", "preserved_specs.json", "diff.json", "incremental_decision.json")]
     for path in native + plugin + [state.plugin_dir(target) / "jobs", state.plugin_dir(target) / "probes", state.plugin_dir(target) / "runs"]: remove(path)
     return {"ok": True, "preserved": str(fm / "phases.json")}
 
 
 def reset_incremental_artifacts(target):
-    """Discard only latest-run results that would otherwise mix run histories."""
+    """Discard transient incremental outputs while retaining hash-checked results.
+
+    `executor.py diff` removes verification results for changed/removed functions.
+    Unchanged results are required to keep the next baseline complete.
+    """
     fm = state.fm_dir(target)
-    paths = [fm / name for name in ("logic_verification_results", "bug_validation", "incremental_updated_specs.json", "trace")]
+    paths = [fm / name for name in ("bug_validation", "incremental_updated_specs.json", "trace")]
     for pattern in (
         "select_relevant_modules.md", "relevant_modules.json",
         "select_relevant_files_*.md", "relevant_files_*.json",
         "spec_update_*.md", "spec_update_*.json", "incremental_*.log",
     ):
         paths.extend(fm.glob(pattern))
-    paths += [state.plugin_dir(target) / "jobs", state.plugin_dir(target) / "probes", state.plugin_dir(target) / "runs"]
+    paths += [state.control_dir(target) / "graph_edges.json", state.control_dir(target) / "agent_static_edges.json", state.plugin_dir(target) / "jobs", state.plugin_dir(target) / "probes", state.plugin_dir(target) / "runs"]
     for path in paths:
         remove(path)
     return {"ok": True, "preserved": str(fm / "extracted_functions")}

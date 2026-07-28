@@ -1,76 +1,53 @@
-# Claude subagent scheduler
+# Host subagent scheduler
 
-This is the Claude-first executor for semantic FM-Agent work.  It maps each
-original FM-Agent OpenCode/LLM worker to one Claude custom subagent.  The
-Coordinator remains the sole owner of `fm_agent_skill/` control state, locks,
-run records, and phase transitions.
+This scheduler maps each original FM-Agent semantic LLM/OpenCode worker to one
+named worker invoked by the active host (Claude Code or Codex). It never starts
+or imports the original FM-Agent. The Coordinator alone owns `fm_agent_skill/`
+control state, phase transitions, lock heartbeats, and user-visible status.
 
 ## Job lifecycle
 
-For every semantic job, the Coordinator creates a manifest with
-`scheduler.py create`, then calls `scheduler.py start` immediately before
-launching its named worker through Claude's `Agent` tool. On return, it checks
-the worker's concise report, then calls `scheduler.py complete`. `complete`
-checks required outputs and the type-specific sidecar/context contract before
-recording success; invalid or missing outputs become `retryable` automatically.
+For each semantic job, the Coordinator calls `scheduler.py create`, then
+`scheduler.py start`, invokes the mapped host subagent, validates its concise
+report, and calls `scheduler.py complete`. Workers may write only their assigned
+sidecars, result JSON, or probe output; they never write manifests or control
+state.
 
-Use the **same job id** for every attempt. A timeout, rate limit, or tool crash
-uses `scheduler.py fail --failure-class execution`; while attempts remain below
-configured `retries`, call `scheduler.py retry` after the retry delay. Phase
-planning and domain context use 10 seconds. A spec layer with newly valid
-sidecars retries its remaining batches immediately; a layer with no new valid
-sidecar waits 10 seconds, matching FM-Agent. `output`
-and `interrupted` failures follow the same path. `input`, `semantic`, and
-`cancelled` failures are terminal and fail the phase. A retried spec worker
-keeps valid sidecar pairs and repairs only missing or invalid pairs. This
-matches FM-Agent's repeated OpenCode calls and partial-progress preservation,
-without creating a new logical worker or rewiring dependencies.
+Retain the same job id for retries. `execution`, `output`, and `interrupted`
+failures use `scheduler.py fail`; if retryable, call `scheduler.py retry` after
+10 seconds, up to configured `retries`. For a specification layer, retry
+remaining batches immediately when any paired sidecar became valid; otherwise
+wait 10 seconds. `input`, `semantic`, and `cancelled` are terminal. A semantic
+verification error is a valid `ERROR` result, not a retry. Bug Validator has
+one total attempt by default. On resume, call `scheduler.py recover` before
+`scheduler.py ready`; valid stale outputs finish their job, invalid stale jobs
+requeue in place when attempts remain.
 
-For verification, an analysis-level problem must be written as a valid `ERROR`
-result and completed; it is not a scheduler retry. Only loss of the Agent call
-or failure to write/validate its assigned result is retryable. Bug Validator
-jobs default to one total attempt, matching FM-Agent's
-`bug_validation_max_retries = 1`.
+Job files live temporarily at `fm_agent_skill/jobs/<job-id>.json`. They are
+removed after a successful analysis and retained only to resume a failed one.
+Concurrent jobs cannot share an output path.
 
-The current job files live at `fm_agent_skill/jobs/<job-id>.json`. Workers must
-never write there. On resume call `scheduler.py recover` before `scheduler.py ready`. A
-stale `running` job with valid current outputs becomes `succeeded`; otherwise
-it becomes `retryable` when attempts remain. Requeue it in place. A final
-`failed` job blocks dependents and makes the Coordinator fail the phase, while
-valid completed independent work remains reusable.
+## Worker mapping
 
-`required_outputs` are project-relative and may be only under `fm_agent/` or
-`fm_agent_skill/probes/`. A worker receives only its assigned output
-paths.  Concurrent jobs may not share one output path; the Coordinator first
-partitions work by phase/layer/function/caller.
-
-## One-to-one worker mapping
-
-| Original FM-Agent semantic worker | Claude worker | Dispatch rule |
+| Original FM-Agent semantic worker | Skill worker | Dispatch rule |
 | --- | --- | --- |
-| phase generation | `fm-phase-plan-worker` | one job, then phase gate |
-| phase post-processing | `fm-phase-refine-worker` | only when cleanup needs semantic refinement |
-| domain context generation | `fm-domain-context-worker` | one job after phases are valid |
-| specification batch generation | `fm-spec-batch-worker` | same phase/layer jobs can run concurrently; batch size defaults to 2 |
-| function Hoare reasoner | `fm-verify-function-worker` | one independent function per job; dispatch when that function's sidecars are ready |
+| phase generation | `fm-phase-plan-worker` | one job, then gate |
+| phase post-processing | `fm-phase-refine-worker` | only when needed |
+| domain context generation | `fm-domain-context-worker` | after valid phases |
+| static edge resolution without CodeGraph | `fm-agent-static-edge-worker` | one bounded candidate, then deterministic validation |
+| specification batch generation | `fm-spec-batch-worker` | same layer batches in parallel |
+| function Hoare reasoner | `fm-verify-function-worker` | one ready function per job |
 | Bug Validator | `fm-bug-validate-worker` | one direct `MISMATCH` per job |
-| incremental relevant-module selector | `fm-select-relevant-modules-worker` | one selection job |
-| incremental relevant-file selector | `fm-select-relevant-files-worker` | one selection job, after module selection |
-| incremental specification update planner | `fm-incremental-spec-plan-worker` | concurrent read-only plans; Coordinator serially applies them |
-| caller reconciliation | `fm-reconcile-caller-info-worker` | one caller per job; caller-before-callee frontier rounds |
+| incremental module selection | `fm-select-relevant-modules-worker` | one job |
+| incremental file selection | `fm-select-relevant-files-worker` | after module selection |
+| incremental spec update planning | `fm-incremental-spec-plan-worker` | parallel read-only plans |
+| caller reconciliation | `fm-reconcile-caller-info-worker` | one caller per job |
 
-## Concurrency and joins
+## Concurrency
 
-Use the saved `concurrency` value as the maximum number of active background
-Agent calls.  Process phases serially.  Within a top-down layer, start up to
-that limit of independent specification batches.  As soon as a batch completes
-and its sidecars validate, verification jobs for its functions may start; do
-not wait for unrelated batches.  Join all required jobs, then run the phase
-gate before advancing.  Bug Validator jobs may run concurrently after their
-individual direct mismatches appear.
-
-Claude subagents have independent context and cannot spawn another subagent.
-Therefore every prompt must name the project, run id, assigned inputs, exact
-allowed outputs, schema reference, and the instruction to return a short
-machine-readable summary.  The Coordinator, not a worker, owns retries,
-dependency checks, state transitions, and user-visible progress.
+Use configured `concurrency` as the maximum active host subagents (default 10).
+Run phases serially; run independent batches in a caller-first layer in
+parallel. Verification can start as soon as its own sidecars validate. Join all
+jobs required by a phase and pass its gate before advancing. Each host-specific
+adapter supplies the actual subagent call; the manifest, boundaries, retries,
+and artifact contract are identical in Claude Code and Codex.

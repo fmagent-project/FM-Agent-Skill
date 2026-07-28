@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Durable current-job state for Claude FM-Agent workers; no run history."""
+"""Durable current-job state for host FM-Agent workers; no run history."""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from _common import project, state
 
-JOB_TYPES = {"phase_plan", "phase_refine", "domain_context", "spec_batch", "verify_function", "bug_validate", "select_relevant_modules", "select_relevant_files", "incremental_spec_plan", "reconcile_caller_info"}
+JOB_TYPES = {"phase_plan", "phase_refine", "domain_context", "resolve_agent_static_edges", "spec_batch", "verify_function", "bug_validate", "select_relevant_modules", "select_relevant_files", "incremental_spec_plan", "reconcile_caller_info"}
 RETRYABLE_FAILURES = {"execution", "output", "interrupted"}
 FAILURE_CLASSES = RETRYABLE_FAILURES | {"input", "semantic", "cancelled"}
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -114,7 +114,7 @@ def recover(target):
         _save(target, job)
     return {"recovered_succeeded": succeeded, "retryable": retryable}
 def main():
-    parser = argparse.ArgumentParser(description="Record and validate current FM-Agent Claude worker jobs.")
+    parser = argparse.ArgumentParser(description="Record and validate current FM-Agent host worker jobs.")
     parser.add_argument("action", choices=("create", "ready", "start", "complete", "fail", "retry", "recover", "show")); parser.add_argument("--project", required=True); parser.add_argument("--job-id"); parser.add_argument("--job-json"); parser.add_argument("--result-json"); parser.add_argument("--message"); parser.add_argument("--failure-class", choices=tuple(sorted(FAILURE_CLASSES)), default="execution")
     args = parser.parse_args(); target = project(args)
     try:

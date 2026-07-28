@@ -9,7 +9,7 @@ from _common import project, state
 
 DEFAULTS = {
     "submodules": [], "one_phase": False, "isolate": False, "concurrency": 10,
-    "scheduler_executor": "claude-subagent", "spec_batch_size": 2, "bug_validation_max_attempts": 1,
+    "scheduler_executor": "host-subagent", "spec_batch_size": 2, "bug_validation_max_attempts": 1,
     "granularity": 40, "retries": 5, "lock_ttl_seconds": 7200, "resume_grace_seconds": 600,
     "codegraph_path": None, "call_graph_backend": "agent-static", "extra_edge": None, "knowledge": [],
 }
@@ -35,7 +35,7 @@ def main():
     parser.add_argument("--one-phase", choices=("true", "false"))
     parser.add_argument("--isolate", choices=("true", "false"))
     parser.add_argument("--concurrency", type=int)
-    parser.add_argument("--scheduler-executor", choices=("claude-subagent",))
+    parser.add_argument("--scheduler-executor", choices=("host-subagent",))
     parser.add_argument("--spec-batch-size", type=int)
     parser.add_argument("--bug-validation-max-attempts", type=int)
     parser.add_argument("--granularity", type=int)

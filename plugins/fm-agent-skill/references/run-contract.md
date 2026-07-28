@@ -19,4 +19,4 @@ the coding agent's responsibilities under the run skill.
 An explicit `--resume` is separate from the table above. It continues the
 newest eligible interrupted full or incremental run only after exact source and
 configuration checks; see [resume-contract.md](resume-contract.md). It does
-not create a baseline, select a new mode, or create a new run id.
+not create a baseline, select a new mode, or replace the active analysis.
