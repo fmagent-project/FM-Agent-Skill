@@ -3,6 +3,10 @@
 All JSON is UTF-8 and atomically replaced. Paths are repository-relative with
 forward slashes.
 
+`fm_agent_plugin/` is a legacy test-output directory and is never a valid Skill
+artifact. A full cleanup removes it; all mutable Skill state lives under
+`fm_agent_skill/`.
+
 - `fm_agent/phases.json` uses FM-Agent's phase/module form, including source
   files and inter-phase dependencies.
 - `fm_agent/fm_agent_file_list.json` is the sorted current set of extracted

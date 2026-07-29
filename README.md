@@ -234,6 +234,9 @@ is the sole location for mutable orchestration data such as `config.json`, the
 current analysis, locks, baselines, function hashes, incremental decisions, and
 isolated probe builds. It is not an FM-Agent analysis result.
 
+`fm_agent_plugin/` is not produced or consumed by this Skill. It is a legacy
+fixture directory removed by the next full cleanup.
+
 For an incremental run, the latest module/file-selection records and
 specification-update records remain in `fm_agent/`; only verification results
 for changed or removed functions and prior Bug Validator results are cleared.

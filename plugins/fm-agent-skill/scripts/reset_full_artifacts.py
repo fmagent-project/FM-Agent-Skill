@@ -27,7 +27,7 @@ def reset(target):
     ):
         native.extend(fm.glob(pattern))
     plugin = [control / name for name in ("analysis_index.json", "call_graph_precision.json", "graph_edges.json", "agent_static_edges.json", "preserved_specs.json", "diff.json", "incremental_decision.json")]
-    for path in native + plugin + [state.plugin_dir(target) / "jobs", state.plugin_dir(target) / "probes", state.plugin_dir(target) / "runs"]: remove(path)
+    for path in native + plugin + [target / "fm_agent_plugin", state.plugin_dir(target) / "jobs", state.plugin_dir(target) / "probes", state.plugin_dir(target) / "runs"]: remove(path)
     return {"ok": True, "preserved": str(fm / "phases.json")}
 
 

@@ -270,6 +270,18 @@ candidate below `fm_agent/`; validate and promote it, then rerun graph:
 This records `agent-static/best-effort` and makes only validated edges available
 to layer construction and incremental propagation.
 
+Immediately after `fm-phase-plan-worker` returns, normalize and validate its
+output before completing `project_understanding` or `refresh_plan`:
+
+```bash
+<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" normalize-phases \
+  --project "$PROJECT"
+```
+
+The normalized file must use `modules[].source_files` and
+`depends_on_phases`. The default production inventory excludes test paths and
+does not create a pseudo-function for a declaration-only header.
+
 Build the plugin control index after extraction:
 
 ```bash

@@ -62,8 +62,8 @@ def validate(target, mode, phase, submodules):
     fm = state.fm_dir(target)
     checks = {
         "preflight": lambda: state.preflight(target)["ok"],
-        "project_understanding": lambda: json_object(fm / "phases.json"),
-        "phase_cleanup": lambda: json_object(fm / "phases.json"),
+        "project_understanding": lambda: state.phases_schema_ready(target)[0],
+        "phase_cleanup": lambda: state.phases_schema_ready(target)[0],
         "extraction": lambda: bool(state.scoped_functions(target, submodules)),
         "call_graph": lambda: call_graph_ready(target),
         "specification": lambda: state.specification_context_ready(target)[0] and state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
@@ -71,7 +71,7 @@ def validate(target, mode, phase, submodules):
         "bug_validation": lambda: (not has_direct_mismatch(target, mode)) or bug_summary_current(target),
         "finalize": lambda: True,
         "validate_baseline": lambda: baseline_ready(target, submodules),
-        "refresh_plan": lambda: json_object(fm / "phases.json"),
+        "refresh_plan": lambda: state.phases_schema_ready(target)[0],
         "preserve_specs": lambda: (state.control_dir(target) / "preserved_specs.json").is_file(),
         "diff": lambda: (state.control_dir(target) / "diff.json").is_file(),
         "rebuild_graph": lambda: call_graph_ready(target),

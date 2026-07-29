@@ -42,24 +42,84 @@ def _fallback_functions(path: Path) -> list[tuple[str, int, int]]:
                 if depth == 0:
                     end_offset = offset; break
         found.append((match.group(1), start, text.count("\n", 0, end_offset) + 1))
-    return found or [(path.stem, 1, max(1, text.count("\n") + 1))]
+    return found
 
 
-def extract(target: Path, submodules: list[str]) -> dict:
-    root = state.fm_dir(target) / "extracted_functions"
-    if root.exists(): shutil.rmtree(root)
-    manifest = []
+def _is_test_source(rel: str) -> bool:
+    parts = Path(rel).as_posix().lower().split("/")
+    name = parts[-1]
+    return any(part in {"test", "tests", "testing", "fixtures"} for part in parts[:-1]) or name.startswith(("test_", "test-")) or "_test." in name or "_tests." in name
+
+
+def _sources(target: Path, submodules: list[str], include_tests: bool) -> list[Path]:
+    result = []
     for source in state.source_files(target):
         rel = source.relative_to(target).as_posix()
         if submodules and not any(rel == item.rstrip("/") or rel.startswith(item.rstrip("/") + "/") for item in submodules): continue
+        if not include_tests and _is_test_source(rel): continue
+        result.append(source)
+    return result
+
+
+def normalize_phases(target: Path, include_tests: bool = False) -> dict:
+    """Write only the current FM-Agent phase/module schema.
+
+    Legacy skill fixtures used `sources`/`dependencies`; normalize them before
+    any extraction or graph action instead of letting downstream code guess.
+    """
+    path = state.fm_dir(target) / "phases.json"; raw = state.read_json(path, {})
+    phases = raw.get("phases") if isinstance(raw, dict) else None
+    if not isinstance(phases, list): raise ValueError("phases.json must contain a phases array")
+    normalized = []
+    for position, phase in enumerate(phases, 1):
+        if not isinstance(phase, dict): raise ValueError("every phase must be an object")
+        number = phase.get("phase", position)
+        if not isinstance(number, int) or number < 1: raise ValueError("phase number must be a positive integer")
+        modules = phase.get("modules")
+        if not isinstance(modules, list):
+            sources = phase.get("sources", [])
+            if not isinstance(sources, list): raise ValueError(f"phase {number} has no modules or sources")
+            modules = [{"name": phase.get("name", f"phase-{number}"), "description": phase.get("description", ""), "source_files": sources}]
+        clean_modules = []
+        for module in modules:
+            if not isinstance(module, dict) or not isinstance(module.get("source_files"), list): raise ValueError(f"phase {number} has invalid module")
+            sources = []
+            for source in module["source_files"]:
+                if not isinstance(source, str): raise ValueError(f"phase {number} has non-string source")
+                candidate = (target / source).resolve()
+                if target not in candidate.parents or not candidate.is_file(): raise ValueError(f"phase {number} references missing source: {source}")
+                rel = candidate.relative_to(target).as_posix()
+                if include_tests or not _is_test_source(rel): sources.append(rel)
+            if sources: clean_modules.append({"name": str(module.get("name", f"phase-{number}")), "description": str(module.get("description", "")), "source_files": sorted(set(sources))})
+        dependencies = phase.get("depends_on_phases", phase.get("dependencies", []))
+        if not isinstance(dependencies, list) or not all(isinstance(value, int) and value > 0 for value in dependencies): raise ValueError(f"phase {number} has invalid dependencies")
+        if clean_modules:
+            normalized.append({"original_phase": number, "name": str(phase.get("name", f"phase-{number}")), "description": str(phase.get("description", "")), "modules": clean_modules, "dependencies": sorted(set(dependencies))})
+    if not normalized: raise ValueError("no production phases remain after normalization")
+    numbers = {item["original_phase"]: index for index, item in enumerate(normalized, 1)}
+    normalized = [{"phase": index, "name": item["name"], "description": item["description"], "modules": item["modules"], "depends_on_phases": [numbers[value] for value in item["dependencies"] if value in numbers and numbers[value] < index]} for index, item in enumerate(normalized, 1)]
+    data = {"project": target.name, "languages": sorted({source.suffix.lower().lstrip(".") for source in _sources(target, [], include_tests)}), "file_extensions": sorted({source.suffix.lower().lstrip(".") for source in _sources(target, [], include_tests)}), "phases": normalized}
+    state.atomic_json(path, data); return {"phase_count": len(normalized), "phases": [item["phase"] for item in normalized]}
+
+
+def extract(target: Path, submodules: list[str], include_tests: bool = False) -> dict:
+    root = state.fm_dir(target) / "extracted_functions"
+    if root.exists(): shutil.rmtree(root)
+    manifest = []
+    for source in _sources(target, submodules, include_tests):
+        rel = source.relative_to(target).as_posix()
         try: functions = _python_functions(source) if source.suffix.lower() == ".py" else _fallback_functions(source)
         except (SyntaxError, OSError): functions = _fallback_functions(source)
         lines = source.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+        counts = {name: sum(1 for candidate, _, _ in functions if candidate == name) for name, _, _ in functions}
+        occurrences: dict[str, int] = {}
         for index, (name, start, end) in enumerate(functions, 1):
+            occurrences[name] = occurrences.get(name, 0) + 1
             artifact = Path(rel).parent / f"{_safe(Path(rel).stem)}-{_safe(name)}-{index}{source.suffix.lower()}"
             destination = root / artifact; destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text("".join(lines[start - 1:end]), encoding="utf-8")
-            manifest.append({"artifact": artifact.as_posix(), "source_path": rel, "name": name, "line_start": start, "line_end": end})
+            suffix = f"#{occurrences[name]}" if counts[name] > 1 else ""
+            manifest.append({"artifact": artifact.as_posix(), "source_path": rel, "name": name, "function_id": f"{rel}::{name}{suffix}", "line_start": start, "line_end": end})
     state.atomic_json(state.fm_dir(target) / "extraction_manifest.json", {"schema_version": 1, "generated_at": state.now(), "functions": manifest})
     state.atomic_json(state.fm_dir(target) / "fm_agent_file_list.json", sorted(item["artifact"] for item in manifest))
     index = build_index(target, submodules)
@@ -153,6 +213,9 @@ def graph(target: Path, codegraph_export: Path | None = None) -> dict:
     phases = state.read_json(state.fm_dir(target) / "phases.json", {})
     index = state.source_index(target) or {}; functions = index.get("functions", [])
     manifest = state.read_json(state.fm_dir(target) / "extraction_manifest.json", {}).get("functions", [])
+    layer_root = state.fm_dir(target) / "spec_prompts"
+    if layer_root.is_dir():
+        for stale in layer_root.glob("phase_*_topdown_layers.json"): stale.unlink()
     source_for = {item.get("artifact"): item.get("source_path") for item in manifest if isinstance(item, dict)}
     edges, backend, precision = _graph_data(target, manifest, codegraph_export)
     by_source = {}
@@ -163,12 +226,13 @@ def graph(target: Path, codegraph_export: Path | None = None) -> dict:
         number = phase.get("phase", position); sources = []
         for module in phase.get("modules", []): sources.extend(module.get("source_files", []))
         sources = sorted(set(sources)); entries = [item for source in sources for item in by_source.get(source, [])]
+        if not entries: continue
         layers = _layers(entries, edges)
         for layer in layers:
             for function in layer["functions"]:
                 function["source_file"] = source_for.get(function["artifact"], "")
         payload = {"phase": number, "phase_name": phase.get("name", f"phase-{number}"), "source_files": sources, "total_layers": len(layers), "layers": layers}
-        path = state.fm_dir(target) / "spec_prompts" / f"phase_{number:02d}_topdown_layers.json"; state.atomic_json(path, payload); written.append(path.name)
+        path = layer_root / f"phase_{number:02d}_topdown_layers.json"; state.atomic_json(path, payload); written.append(path.name)
     state.atomic_json(state.control_dir(target) / "graph_edges.json", {"schema_version": 1, "backend": backend, "precision": precision, "edges": edges, "generated_at": state.now()})
     state.atomic_json(state.control_dir(target) / "call_graph_precision.json", {"backend": backend, "precision": precision, "reason": "CodeGraph export mapped to extracted artifacts" if backend == "codegraph" else "deterministic extraction inventory; semantic edge resolution is delegated to the Coordinator", "generated_at": state.now()})
     return {"layers": written, "function_count": len(functions), "edge_count": len(edges), "backend": backend}
@@ -182,7 +246,7 @@ def preserve_specs(target: Path) -> dict:
         if spec.is_file() and info.is_file():
             rel = artifact.relative_to(root).as_posix()
             saved[rel] = {"source_hash": state.file_hash(artifact), "spec": state.read_json(spec, {}), "info": state.read_json(info, {})}
-    files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in state.source_files(target)}
+    files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in _sources(target, [], False)}
     data = {"schema_version": 1, "generated_at": state.now(), "files": files, "artifacts": saved}
     state.atomic_json(state.control_dir(target) / "preserved_specs.json", data); return {"preserved": len(saved)}
 
@@ -211,7 +275,7 @@ def diff(target: Path) -> dict:
     manifest = state.read_json(state.fm_dir(target) / "extraction_manifest.json", {}).get("functions", [])
     source_for = {item.get("artifact"): item.get("source_path") for item in manifest if isinstance(item, dict)}
     old_files = preserved.get("files", {}) if isinstance(preserved.get("files", {}), dict) else {}
-    current_files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in state.source_files(target)}
+    current_files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in _sources(target, [], False)}
     changed_files = {path for path in set(old_files) | set(current_files) if old_files.get(path) != current_files.get(path)}
     added = sorted(key for key in current if key not in old)
     removed = sorted(key for key in old if key not in current)
@@ -247,10 +311,10 @@ def select(target: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run deterministic FM-Agent Skill executor actions without original FM-Agent.")
-    parser.add_argument("action", choices=("extract", "graph", "record-agent-edges", "preserve-specs", "restore-specs", "diff", "select")); parser.add_argument("--project", required=True); parser.add_argument("--submodule", action="append", default=[]); parser.add_argument("--codegraph-export"); parser.add_argument("--edges-file")
+    parser.add_argument("action", choices=("normalize-phases", "extract", "graph", "record-agent-edges", "preserve-specs", "restore-specs", "diff", "select")); parser.add_argument("--project", required=True); parser.add_argument("--submodule", action="append", default=[]); parser.add_argument("--include-tests", action="store_true"); parser.add_argument("--codegraph-export"); parser.add_argument("--edges-file")
     args = parser.parse_args(); target = project(args)
     if args.action == "record-agent-edges" and not args.edges_file: parser.error("record-agent-edges requires --edges-file")
-    result = {"extract": lambda: extract(target, args.submodule), "graph": lambda: graph(target, Path(args.codegraph_export) if args.codegraph_export else None), "record-agent-edges": lambda: record_agent_edges(target, Path(args.edges_file)), "preserve-specs": lambda: preserve_specs(target), "restore-specs": lambda: restore_specs(target), "diff": lambda: diff(target), "select": lambda: select(target)}[args.action]()
+    result = {"normalize-phases": lambda: normalize_phases(target, args.include_tests), "extract": lambda: extract(target, args.submodule, args.include_tests), "graph": lambda: graph(target, Path(args.codegraph_export) if args.codegraph_export else None), "record-agent-edges": lambda: record_agent_edges(target, Path(args.edges_file)), "preserve-specs": lambda: preserve_specs(target), "restore-specs": lambda: restore_specs(target), "diff": lambda: diff(target), "select": lambda: select(target)}[args.action]()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

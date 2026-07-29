@@ -6,7 +6,7 @@ automatically written intent. Every selection must be recorded in
 `caller-propagation`, `callee-propagation`, or `spec-change`.
 
 1. `validate_baseline`: confirm baseline index, hashes, specs, and verification artifacts.
-2. `refresh_plan`: dispatch `fm-phase-plan-worker` (and `fm-domain-context-worker` when context changes) for the chosen scope.
+2. `refresh_plan`: dispatch `fm-phase-plan-worker` (and `fm-domain-context-worker` when context changes) for the chosen scope, then run `executor.py normalize-phases --project "$PROJECT"` before its gate.
 3. `preserve_specs`: run `executor.py preserve-specs --project "$PROJECT"` before re-extraction to snapshot compatible paired sidecars in plugin control state.
 4. `diff`: run `executor.py extract --project "$PROJECT"`, then `executor.py diff --project "$PROJECT"`. It compares per-function hashes and per-source-file hashes: any changed file includes every current function from that file, even when a function body is unchanged. It removes verification results for that whole conservative range and for removed functions; only hash-compatible unaffected results remain available for the next baseline.
 5. `rebuild_graph`: when CodeGraph is selected, run `codegraph.py export --output "$PROJECT/fm_agent_skill/control/codegraph_export.json"`, then run `executor.py graph --project "$PROJECT" --codegraph-export "$PROJECT/fm_agent_skill/control/codegraph_export.json"`. Otherwise dispatch `fm-agent-static-edge-worker`, promote its candidate with `executor.py record-agent-edges`, then run `executor.py graph`; its validated edges seed automatic caller/callee propagation.

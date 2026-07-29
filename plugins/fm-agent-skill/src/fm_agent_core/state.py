@@ -116,8 +116,14 @@ def source_files(project: Path) -> list[Path]:
     found = []
     for root, directories, files in os.walk(project):
         directories[:] = [name for name in directories if name not in ignored]
-        found.extend(Path(root) / name for name in files if Path(name).suffix.lower() in SOURCE_EXTENSIONS)
+        found.extend(Path(root) / name for name in files if Path(name).suffix.lower() in SOURCE_EXTENSIONS and not is_test_source_path((Path(root) / name).relative_to(project).as_posix()))
     return found
+
+
+def is_test_source_path(value: str) -> bool:
+    parts = value.replace("\\", "/").lower().split("/")
+    name = parts[-1]
+    return any(part in {"test", "tests", "testing", "fixtures"} for part in parts[:-1]) or name.startswith(("test_", "test-")) or "_test." in name or "_tests." in name
 
 
 def source_snapshot(project: Path, submodules: list[str] | None = None) -> dict[str, str]:
@@ -228,6 +234,23 @@ def source_index(project: Path) -> dict | None:
     return data if isinstance(data, dict) and isinstance(data.get("functions"), list) else None
 
 
+def phases_schema_ready(project: Path) -> tuple[bool, str]:
+    data = read_json(fm_dir(project) / "phases.json", {})
+    phases = data.get("phases") if isinstance(data, dict) else None
+    if not isinstance(phases, list) or not phases: return False, "missing phases"
+    for position, phase in enumerate(phases, 1):
+        if not isinstance(phase, dict) or phase.get("phase") != position or not isinstance(phase.get("modules"), list):
+            return False, f"phase {position} is not normalized"
+        for module in phase["modules"]:
+            if not isinstance(module, dict) or not isinstance(module.get("source_files"), list) or not module["source_files"]:
+                return False, f"phase {position} has invalid module sources"
+            for source in module["source_files"]:
+                if not isinstance(source, str) or not (project / source).is_file() or is_test_source_path(source): return False, f"phase {position} has invalid production source"
+        if not isinstance(phase.get("depends_on_phases"), list) or not all(isinstance(value, int) and 0 < value < position for value in phase["depends_on_phases"]):
+            return False, f"phase {position} has invalid dependencies"
+    return True, ""
+
+
 def _in_scope(item: dict, submodules: list[str]) -> bool:
     if not submodules:
         return True
@@ -274,6 +297,9 @@ def _valid_info(data) -> bool:
 
 def sidecars_ready(artifact: Path) -> tuple[bool, str]:
     """Validate FM-Agent's paired specification and call-information files."""
+    source = artifact.read_text(encoding="utf-8", errors="replace") if artifact.is_file() else ""
+    if "[SPEC]" in source or "[INFO]" in source:
+        return False, "extracted source contains inline specification metadata"
     spec_path, info_path = Path(f"{artifact}.spec.json"), Path(f"{artifact}.info.json")
     spec, info = read_json(spec_path, None), read_json(info_path, None)
     if not _valid_spec(spec):
@@ -407,15 +433,19 @@ def phase_layers_ready(project: Path) -> tuple[bool, str]:
     root = fm_dir(project) / "spec_prompts"
     if not isinstance(phases, list) or not phases or not root.is_dir():
         return False, "missing phases or top-down layer artifacts"
-    expected, seen_functions = [], set()
+    indexed = source_index(project).get("functions", [])
+    expected, seen_functions, expected_functions = [], set(), set()
     for index, phase in enumerate(phases, start=1):
         number = _phase_number(phase, index)
         path = root / f"phase_{number:02d}_topdown_layers.json"
-        expected.append(path.name)
+        sources = _phase_sources(phase)
+        phase_functions = {item.get("id") for item in indexed if isinstance(item, dict) and item.get("path") in sources and isinstance(item.get("id"), str)}
+        if not phase_functions:
+            continue
+        expected.append(path.name); expected_functions.update(phase_functions)
         data = read_json(path, None)
         if not isinstance(data, dict) or data.get("phase") != number:
             return False, f"missing or invalid layer artifact for phase {number}"
-        sources = _phase_sources(phase)
         if sorted(data.get("source_files", [])) != sources:
             return False, f"layer sources do not match phase {number}"
         layers = data.get("layers")
@@ -433,6 +463,7 @@ def phase_layers_ready(project: Path) -> tuple[bool, str]:
                 seen_functions.add(function_id)
     actual = sorted(path.name for path in root.glob("phase_*_topdown_layers.json"))
     if actual != sorted(expected): return False, "unexpected phase layer artifact set"
+    if seen_functions != expected_functions: return False, "layer artifacts do not cover every indexed phase function"
     return True, ""
 
 
@@ -501,7 +532,7 @@ def untracked_sources(project: Path) -> list[str]:
 
 def is_supported_source_path(value: str) -> bool:
     path = value.replace("\\", "/")
-    return Path(path).suffix.lower() in SOURCE_EXTENSIONS and not path.startswith(("fm_agent/", "fm_agent_skill/"))
+    return Path(path).suffix.lower() in SOURCE_EXTENSIONS and not path.startswith(("fm_agent/", "fm_agent_skill/")) and not is_test_source_path(path)
 
 
 def changed_since(project: Path, commit: str) -> bool:
