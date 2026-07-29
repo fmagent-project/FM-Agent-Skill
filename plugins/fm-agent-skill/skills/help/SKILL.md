@@ -1,6 +1,6 @@
 ---
 name: help
-description: Explain how to use the FM-Agent plugin, including its available skills, automatic full/incremental/no-op selection, explicit resume behavior, artifact locations, cross-client behavior, and current capabilities. Use when the user asks what FM-Agent can do, how to start, resume, or configure it, where results live, or why it selected a mode.
+description: Explain how to use the FM-Agent Skill, including its available entry points, automatic full/incremental/no-op selection, explicit resume behavior, artifact locations, cross-client behavior, and current capabilities. Use when the user asks what FM-Agent can do, how to start, resume, or configure it, where results live, or why it selected a mode.
 ---
 
 # FM-Agent help
@@ -11,7 +11,7 @@ for current run state or a particular finding to `diagnose` instead.
 
 ## Explain the available skills
 
-State that the plugin exposes these five skills:
+State that the FM-Agent Skill exposes these five entry points:
 
 | Skill | Use it for |
 | --- | --- |
@@ -43,7 +43,7 @@ compatible. A scope, knowledge-file, or supplemental-edge change deliberately
 causes full analysis.
 
 A source-file change means an added, modified, or deleted file whose extension
-is supported by the plugin. Documentation-only changes do not start an
+is supported by the Skill. Documentation-only changes do not start an
 incremental analysis.
 
 ## Explain resume
@@ -68,7 +68,7 @@ Explain the artifact boundary:
 - `fm_agent/` contains FM-Agent-compatible analysis artifacts: phases, extracted
   function copies with `.spec.json` / `.info.json` sidecars, specification context,
   top-down layers, verification results, and any bug-validation output.
-- `fm_agent_skill/` contains plugin control state: saved configuration, locks,
+- `fm_agent_skill/` contains Skill control state: saved configuration, locks,
   active analysis state, baseline fingerprints, analysis indexes, graph precision, incremental
   decisions, and isolated probe builds.
 - Project business source and extracted source copies are never annotated with
@@ -76,12 +76,12 @@ Explain the artifact boundary:
 
 Explain that the same `skills/`, `scripts/`, and `references/` are shared by
 Codex and Claude Code. Their manifests only provide discovery; each skill
-resolves its plugin root from its own `SKILL.md` location as defined in
+resolves its Skill root from its own `SKILL.md` location as defined in
 [runtime-path.md](../../references/runtime-path.md).
 
 Explain that `run` detects optional CodeGraph support before analysis. When it
 is available, full and incremental analysis automatically remove and regenerate
-the derived CodeGraph index without requesting authorization. The plugin does
+the derived CodeGraph index without requesting authorization. The Skill does
 not install unavailable software; it records a best-effort static call graph
 rather than claiming exact graph precision.
 
@@ -91,12 +91,12 @@ continuing; no-op reports that no analysis stage ran.
 
 ## Explain the current capabilities
 
-Currently, the plugin supports a full `run_pipeline`, automatic baseline-driven
+Currently, the Skill supports a full `run_pipeline`, automatic baseline-driven
 full/incremental/no-op selection, and safe explicit resume of an interrupted
 full or incremental run.
 
-Scripts coordinate plugin state and validate artifacts.
+Scripts coordinate Skill state and validate artifacts.
 
 The coding agent performs repository understanding, specification writing, and reasoning during the `run` workflow.
 
-Describe and execute only capabilities documented by this plugin's shared skills and references. When uncertain, state the documented current behavior rather than inferring features from the original FM-Agent project.
+Describe and execute only capabilities documented by this Skill's shared instructions and references. When uncertain, state the documented current behavior rather than inferring features from the original FM-Agent project.

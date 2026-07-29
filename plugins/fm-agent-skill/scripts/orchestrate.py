@@ -40,8 +40,8 @@ def build_config(args, target, base=None):
 
 
 def inspection_config(args, target):
-    saved = state.read_json(state.plugin_dir(target) / "config.json", {})
-    baseline = state.read_json(state.plugin_dir(target) / "baseline.json", {})
+    saved = state.read_json(state.skill_dir(target) / "config.json", {})
+    baseline = state.read_json(state.skill_dir(target) / "baseline.json", {})
     prior = baseline.get("inputs", {}).get("config") if isinstance(baseline, dict) else None
     base = dict(prior if isinstance(prior, dict) else load(target)); base.update(saved if isinstance(saved, dict) else {})
     return build_config(args, target, base)
@@ -116,11 +116,11 @@ def main():
         if selected["mode"] == "noop":
             state.refresh_observed_commit(target, selected["baseline"]["saved"])
             record = {"schema_version": 1, "mode": "noop", "status": "noop", "started_at": state.now(), "ended_at": state.now(), "fingerprint": selected["baseline"]["saved"]["fingerprint"], "inputs": selected["baseline"]["saved"]["inputs"], "baseline_commit": selected["baseline"]["commit"]}
-            state.atomic_json(state.plugin_dir(target) / "active.json", record); release(target, "idle")
+            state.atomic_json(state.skill_dir(target) / "active.json", record); release(target, "idle")
         else:
             record = call_pipeline(target, "prepare", selected["mode"], selected["config"])
             if selected["mode"] == "incremental":
-                record["intent_path"] = str(state.build_intent(target, selected["baseline"]["commit"], args.note)); state.atomic_json(state.plugin_dir(target) / "active.json", record)
+                record["intent_path"] = str(state.build_intent(target, selected["baseline"]["commit"], args.note)); state.atomic_json(state.skill_dir(target) / "active.json", record)
         print(json.dumps({"ok": True, "mode": selected["mode"], "project": str(target), "isolated": isolated, "baseline": selected["baseline"], "config": selected["config"], "lock": lock, "analysis": record}, ensure_ascii=False, indent=2))
     except Exception:
         release(target, "failed")

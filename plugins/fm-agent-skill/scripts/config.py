@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Persist non-secret FM-Agent plugin defaults in the target repository."""
+"""Persist non-secret FM-Agent Skill defaults in the target repository."""
 from __future__ import annotations
 
 import argparse
@@ -16,7 +16,7 @@ DEFAULTS = {
 
 
 def load(target):
-    saved = state.read_json(state.plugin_dir(target) / "config.json", {})
+    saved = state.read_json(state.skill_dir(target) / "config.json", {})
     result = dict(DEFAULTS)
     if isinstance(saved, dict):
         result.update({key: value for key, value in saved.items() if key in DEFAULTS})
@@ -24,11 +24,11 @@ def load(target):
 
 
 def save(target, config):
-    state.atomic_json(state.plugin_dir(target) / "config.json", config)
+    state.atomic_json(state.skill_dir(target) / "config.json", config)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Read or persist FM-Agent plugin defaults; no secrets are copied.")
+    parser = argparse.ArgumentParser(description="Read or persist FM-Agent Skill defaults; no secrets are copied.")
     parser.add_argument("action", choices=("show", "set", "reset"))
     parser.add_argument("--project", required=True)
     parser.add_argument("--submodule", dest="submodules", action="append")

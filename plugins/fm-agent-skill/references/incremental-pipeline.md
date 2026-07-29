@@ -7,7 +7,7 @@ automatically written intent. Every selection must be recorded in
 
 1. `validate_baseline`: confirm baseline index, hashes, specs, and verification artifacts.
 2. `refresh_plan`: dispatch `fm-phase-plan-worker` (and `fm-domain-context-worker` when context changes) for the chosen scope, then run `executor.py normalize-phases --project "$PROJECT"` before its gate.
-3. `preserve_specs`: run `executor.py preserve-specs --project "$PROJECT"` before re-extraction to snapshot compatible paired sidecars in plugin control state.
+3. `preserve_specs`: run `executor.py preserve-specs --project "$PROJECT"` before re-extraction to snapshot compatible paired sidecars in Skill control state.
 4. `diff`: run `executor.py extract --project "$PROJECT"`, then `executor.py diff --project "$PROJECT"`. It compares per-function hashes and per-source-file hashes: any changed file includes every current function from that file, even when a function body is unchanged. It removes verification results for that whole conservative range and for removed functions; only hash-compatible unaffected results remain available for the next baseline.
 5. `rebuild_graph`: when CodeGraph is selected, run `codegraph.py export --output "$PROJECT/fm_agent_skill/control/codegraph_export.json"`, then run `executor.py graph --project "$PROJECT" --codegraph-export "$PROJECT/fm_agent_skill/control/codegraph_export.json"`. Otherwise dispatch `fm-agent-static-edge-worker`, promote its candidate with `executor.py record-agent-edges`, then run `executor.py graph`; its validated edges seed automatic caller/callee propagation.
 6. `select_scope`: run `executor.py select --project "$PROJECT"` for the deterministic changed-function seed. Then use `fm-select-relevant-modules-worker` and `fm-select-relevant-files-worker` to add caller/callee propagation. After validating each file-selector record, merge it with `incremental.py merge-selection --record <record> --reason caller-propagation` (or its actual propagation reason); the control decision records why every indexed function is included or excluded.
@@ -16,7 +16,7 @@ automatically written intent. Every selection must be recorded in
 9. `bug_validation`: dispatch `fm-bug-validate-worker` only for selected direct `MISMATCH` candidates in an isolated probe build. When one exists, rebuild its probe under `fm_agent_skill/probes/<bug-id>/`, then overwrite the current `fm_agent/bug_validation/summary.json`. Incremental cleanup removes any older summary before this phase.
 10. `finalize`: gate all retained and selected artifacts, then save the new baseline.
 
-Deleted functions must be absent from the plugin control analysis index, extracted artifacts,
+Deleted functions must be absent from the Skill control analysis index, extracted artifacts,
 required result mapping, and retained-spec mapping. A stale or malformed
 artifact makes the gate fail rather than being treated as valid reuse.
 

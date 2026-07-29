@@ -1,4 +1,4 @@
-"""Small, deterministic helpers for FM-Agent plugin state and artifacts.
+"""Small, deterministic helpers for FM-Agent Skill state and artifacts.
 
 These helpers deliberately do not invoke ``main.py`` or an LLM.  They make the
 agent-led workflow resumable and make a baseline reusable only when its
@@ -52,13 +52,13 @@ def git(project: Path, *args: str, check: bool = True) -> str:
     return completed.stdout.strip()
 
 
-def plugin_dir(project: Path) -> Path:
+def skill_dir(project: Path) -> Path:
     return project / "fm_agent_skill"
 
 
 def control_dir(project: Path) -> Path:
-    """Return plugin-owned state, separate from FM-Agent's workspace."""
-    return plugin_dir(project) / "control"
+    """Return Skill-owned state, separate from FM-Agent's workspace."""
+    return skill_dir(project) / "control"
 
 
 def fm_dir(project: Path) -> Path:
@@ -112,7 +112,7 @@ def fingerprint(project: Path, one_phase: bool, submodules: list[str], extra_edg
 
 
 def source_files(project: Path) -> list[Path]:
-    ignored = {".git", ".venv", "node_modules", "fm_agent", "fm_agent_skill", ".codegraph", "build", "dist", "out", "target", "CMakeFiles"}
+    ignored = {".git", ".venv", "node_modules", "fm_agent", "fm_agent_skill", "fm_agent_plugin", ".codegraph", "build", "dist", "out", "target", "CMakeFiles"}
     found = []
     for root, directories, files in os.walk(project):
         directories[:] = [name for name in directories if name not in ignored]
@@ -149,13 +149,13 @@ def refresh_observed_commit(project: Path, saved: dict) -> dict:
     current = git(project, "rev-parse", "HEAD")
     if saved.get("observed_commit") != current:
         saved["observed_commit"] = current; saved["observed_at"] = now()
-        atomic_json(plugin_dir(project) / "baseline.json", saved)
+        atomic_json(skill_dir(project) / "baseline.json", saved)
     return saved
 
 
 def active_record(project: Path) -> dict:
     """Return the sole current-analysis record, never a run history."""
-    value = read_json(plugin_dir(project) / "active.json", {})
+    value = read_json(skill_dir(project) / "active.json", {})
     return value if isinstance(value, dict) else {}
 
 
@@ -489,7 +489,7 @@ def specification_context_ready(project: Path) -> tuple[bool, str]:
 def specs_ready(project: Path, submodules: list[str] | None = None) -> tuple[bool, str, int]:
     functions = scoped_functions(project, submodules or [])
     if not functions:
-        return False, "missing or invalid plugin control analysis_index.json", 0
+        return False, "missing or invalid Skill control analysis_index.json", 0
     ready, reason = function_artifacts_ready(project, functions, submodules)
     return ready, reason, len(functions)
 
@@ -498,7 +498,7 @@ def inspect_baseline(project: Path, config_fingerprint: str, submodules: list[st
     phases = read_json(fm_dir(project) / "phases.json", None)
     if not isinstance(phases, dict) or not isinstance(phases.get("phases"), list):
         return {"valid": False, "reason": "missing or invalid fm_agent/phases.json"}
-    saved = read_json(plugin_dir(project) / "baseline.json", {})
+    saved = read_json(skill_dir(project) / "baseline.json", {})
     if not isinstance(saved, dict) or saved.get("schema_version") != 3 or saved.get("fingerprint") != config_fingerprint:
         return {"valid": False, "reason": "analysis range or configuration is incompatible"}
     commit = saved.get("analysis_commit")
@@ -532,7 +532,7 @@ def untracked_sources(project: Path) -> list[str]:
 
 def is_supported_source_path(value: str) -> bool:
     path = value.replace("\\", "/")
-    return Path(path).suffix.lower() in SOURCE_EXTENSIONS and not path.startswith(("fm_agent/", "fm_agent_skill/")) and not is_test_source_path(path)
+    return Path(path).suffix.lower() in SOURCE_EXTENSIONS and not path.startswith(("fm_agent/", "fm_agent_skill/", "fm_agent_plugin/")) and not is_test_source_path(path)
 
 
 def changed_since(project: Path, commit: str) -> bool:
@@ -542,7 +542,7 @@ def changed_since(project: Path, commit: str) -> bool:
 
 def build_intent(project: Path, base_commit: str, note: str) -> Path:
     git(project, "cat-file", "-e", f"{base_commit}^{{commit}}")
-    path = plugin_dir(project) / "control" / "incremental_intent.md"
+    path = skill_dir(project) / "control" / "incremental_intent.md"
     commits = git(project, "log", "--format=%h %s", f"{base_commit}..HEAD", check=False).splitlines()
     files = git(project, "diff", "--name-status", base_commit, "--", check=False).splitlines()
     stat = git(project, "diff", "--stat", base_commit, "--", check=False)

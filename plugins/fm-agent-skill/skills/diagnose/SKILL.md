@@ -6,13 +6,13 @@ description: Inspect FM-Agent run state, resumable interrupted analyses, Bug Val
 # FM-Agent diagnosis
 
 Read [runtime-path.md](../../references/runtime-path.md) and resolve
-`FM_AGENT_PLUGIN_ROOT` before invoking a script. This shared skill must work in
+`FM_AGENT_SKILL_ROOT` before invoking a script. This shared skill must work in
 both Codex and Claude Code; never use `CLAUDE_SKILL_DIR`.
 
 Read existing artifacts only:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/diagnose.py" --project "$PROJECT" --bug-id "$BUG_ID"
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/diagnose.py" --project "$PROJECT" --bug-id "$BUG_ID"
 ```
 
 When no id is given, omit `--bug-id`. Summarize the latest mode, baseline commit,

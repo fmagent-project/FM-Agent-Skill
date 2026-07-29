@@ -6,7 +6,7 @@ parser = argparse.ArgumentParser(description="Read existing FM-Agent diagnostics
 parser.add_argument("--project", required=True); parser.add_argument("--bug-id")
 args = parser.parse_args(); target = project(args)
 summary = state.read_json(state.fm_dir(target) / "bug_validation" / "summary.json", {})
-run = state.read_json(state.plugin_dir(target) / "active.json", {})
+run = state.read_json(state.skill_dir(target) / "active.json", {})
 resumable = state.inspect_resume(target)
 result = {
     "run": run,

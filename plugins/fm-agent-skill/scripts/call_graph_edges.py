@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strict, recursive supplemental call-edge loader used by the plugin."""
+"""Strict, recursive supplemental call-edge loader used by the Skill."""
 from __future__ import annotations
 
 import argparse

@@ -2,14 +2,14 @@
 
 [English](#fm-agent-skill) | [简体中文](#中文说明)
 
-FM-Agent Skill is a Claude Code and Codex correctness-analysis plugin following the
+FM-Agent Skill is a Claude Code and Codex correctness-analysis Skill following the
 staged analysis ideas of [FM-Agent](https://github.com/fmagent-project/FM-Agent).
 Its host Coordinator uses deterministic tools for state and graphs, and
 dispatches the original FM-Agent semantic-worker boundaries as controlled host
 subagents. It is a direct implementation: it never launches or imports the
 original FM-Agent pipeline.
 
-The plugin runs in a Git working tree and does not modify business source code.
+The Skill runs in a Git working tree and does not modify business source code.
 The current release supports full analysis, automatic incremental analysis,
 no-op provenance refreshes, and explicit safe resume of interrupted analyses.
 
@@ -39,12 +39,12 @@ no-op provenance refreshes, and explicit safe resume of interrupted analyses.
 - The target must contain at least one supported source file.
 - Use Claude Code or Codex with its subagent capability available.
 - CodeGraph is optional. When available, it is rebuilt automatically for a
-  full or incremental analysis. The plugin does not install missing software;
+  full or incremental analysis. The Skill does not install missing software;
   it records an `agent-static` fallback instead.
 
 ## Installation
 
-Both marketplaces expose the plugin as `fm-agent-skill`.
+Both marketplaces expose the Skill as `fm-agent-skill`.
 
 ### Claude Code
 
@@ -92,7 +92,7 @@ or natural-language request passes them in:
 | `--resume` | Explicitly continue the eligible interrupted full or incremental analysis. It cannot be combined with a new note or configuration options. |
 
 There is normally no need to select full or incremental mode manually. The
-plugin selects it from its baseline and source snapshot.
+Skill selects it from its baseline and source snapshot.
 
 ## Host worker scheduler
 
@@ -127,7 +127,7 @@ independent job outputs. On resume, the Coordinator first reconciles stale
 `running` jobs: valid completed output is accepted, while incomplete output is
 made retryable in place when attempts remain.
 
-The plugin keeps no run history. A full analysis clears old generated FM-Agent
+The Skill keeps no run history. A full analysis clears old generated FM-Agent
 artifacts, trace payloads, current jobs, and probe builds. An incremental
 analysis retains compatible sidecars and hash-compatible unchanged verification
 results, removes changed/removed results, and clears prior bug, trace, job, and
@@ -179,7 +179,7 @@ content does not cause a duplicate analysis.
 ## CodeGraph and precision
 
 CodeGraph is used only for a full or incremental analysis. When it is
-available, the plugin automatically removes and rebuilds
+available, the Skill automatically removes and rebuilds
 `$PROJECT/.codegraph/`; no separate authorization is requested.
 
 - Available, rebuilt, and mapped to current extracted artifacts: call-graph
@@ -193,7 +193,7 @@ available, the plugin automatically removes and rebuilds
 
 ## Artifacts
 
-Artifacts are written to the target project, not the plugin installation:
+Artifacts are written to the target project, not the Skill installation:
 
 | Directory | Contents |
 | --- | --- |
@@ -227,15 +227,12 @@ fm_agent/
 Each `.spec.json` contains exactly `signature`, `pre_condition`, and
 `post_condition`. Each `.info.json` contains `callees`, with the caller's
 expected contract for every in-scope callee. `fm_agent_file_list.json` and the
-plugin control index list only function source copies, never sidecars.
+Skill control index list only function source copies, never sidecars.
 
 `fm_agent_skill/` is deliberately separate from those analysis artifacts. It
 is the sole location for mutable orchestration data such as `config.json`, the
 current analysis, locks, baselines, function hashes, incremental decisions, and
 isolated probe builds. It is not an FM-Agent analysis result.
-
-`fm_agent_plugin/` is not produced or consumed by this Skill. It is a legacy
-fixture directory removed by the next full cleanup.
 
 For an incremental run, the latest module/file-selection records and
 specification-update records remain in `fm_agent/`; only verification results
@@ -258,7 +255,7 @@ analysis state and reports, not business source.
 
 ## Safety and recovery
 
-- The plugin does not modify business source files or write specification
+- The Skill does not modify business source files or write specification
   comments back into them. It also does not modify extracted function copies;
   generated contracts are sidecars.
 - Each analysis owns a current-workspace lock. Completion, failure, or an
@@ -313,7 +310,7 @@ Licensed under the [Apache License 2.0](LICENSE).
 
 # 中文说明
 
-FM-Agent Skill 是面向 Claude Code 的代码正确性分析插件。它借鉴
+FM-Agent Skill 是面向 Claude Code 的代码正确性分析 Skill。它借鉴
 [FM-Agent](https://github.com/fmagent-project/FM-Agent) 的分阶段分析思路：Coordinator
 负责基线、锁、状态、调用图和调度，Claude subagent 负责与原 FM-Agent LLM worker 一一对应的
 语义工作。Codex executor 仍在后续规划中，当前版本不应在 Codex 中宣称已完成语义分析。
@@ -322,7 +319,7 @@ FM-Agent Skill 是面向 Claude Code 的代码正确性分析插件。它借鉴
 
 ## 安装与使用
 
-插件名为 `fm-agent-skill`。安装命令：
+Skill 名为 `fm-agent-skill`。Claude Code 使用其插件安装命令分发该 Skill：
 
 ```bash
 # Claude Code
@@ -367,7 +364,7 @@ domain context 每次失败后等待 10 秒；spec 阶段若已得到部分有�
 不会启动，当前阶段失败，但已有独立有效产物会保留。resume 前会先回收遗留 `running` job：产物有效
 则直接成功，否则在次数未耗尽时原地转为 `retryable`。
 
-插件不保留 run 历史。full 会清理旧的派生产物、trace payload、当前 jobs 与 probe；
+Skill 不保留 run 历史。full 会清理旧的派生产物、trace payload、当前 jobs 与 probe；
 incremental 会保留兼容 sidecar，但清理旧 verification、bug、trace、jobs 与 probe。
 成功结束后会删除当前 jobs 与 probe；下一次分析覆盖 `active.json`，只有
 `baseline.json` 长期保留。

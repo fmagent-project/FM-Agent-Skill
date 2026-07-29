@@ -9,9 +9,9 @@ This is the sole public analysis entry point. Execute it directly in Claude
 Code or Codex using that host's worker/subagent capability. Never launch,
 import, or shell out to the original FM-Agent project or its remote-LLM
 pipeline. The bundled deterministic executor and the host Coordinator together
-are this plugin's implementation.
+are this Skill's implementation.
 
-The Coordinator is the plugin's equivalent of FM-Agent's original `main.py`.
+The Coordinator is the Skill's equivalent of FM-Agent's original `main.py`.
 It coordinates local deterministic tools and dispatches the named workers using
 the current host's subagent mechanism; it never performs a worker's semantic
 task inline. Read
@@ -20,11 +20,18 @@ task inline. Read
 starting.
 
 Before invoking a script, read [runtime-path.md](../../references/runtime-path.md)
-and resolve `FM_AGENT_PLUGIN_ROOT`; never use `CLAUDE_SKILL_DIR`.
+and resolve `FM_AGENT_SKILL_ROOT`; never use `CLAUDE_SKILL_DIR`.
 
 Read [progress-reporting.md](../../references/progress-reporting.md) before any
 stateful action. User-visible phase progress is mandatory; do not rely on a
 client to infer it from tool output.
+
+## Output ownership
+
+Write FM-Agent-compatible analysis artifacts only below `fm_agent/` and mutable
+Skill control state only below `fm_agent_skill/`. Do not derive a target-project
+directory name from the Skill's installation or marketplace packaging. Before
+dispatching a worker, give it only the output paths listed in its job manifest.
 
 ## Public parameters
 
@@ -61,7 +68,7 @@ each option separately. First perform this read-only inspection. It never
 acquires a lock, writes state, or rebuilds CodeGraph:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/orchestrate.py" inspect \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/orchestrate.py" inspect \
   --project "$PROJECT" \
   [--submodule "$PATH"]... [--knowledge "$FILE"]... \
   [--extra-edge "$FILE_OR_DIR"] [--one-phase] [--isolate]
@@ -77,7 +84,7 @@ configuration. It is mutually exclusive with `--submodule`, `--knowledge`,
 before any ordinary mode selection or CodeGraph action:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/orchestrate.py" resume-inspect \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/orchestrate.py" resume-inspect \
   --project "$PROJECT"
 ```
 
@@ -89,7 +96,7 @@ working. Ask the user whether to take over; only after an explicit affirmative
 reply may the agent append `--take-over` below.
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/orchestrate.py" resume \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/orchestrate.py" resume \
   --project "$PROJECT" [--take-over]
 ```
 
@@ -125,7 +132,7 @@ and refreshes only Git provenance, then finish.
 Only when inspection returns `full` or `incremental`, inspect CodeGraph:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/codegraph.py" status --project "$PROJECT"
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/codegraph.py" status --project "$PROJECT"
 ```
 
 If it is available, include the internal `--codegraph` option below and rebuild
@@ -137,7 +144,7 @@ failure fails the run; do not silently change backend.
 After determining availability, run exactly one stateful dispatch command:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/orchestrate.py" dispatch \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/orchestrate.py" dispatch \
   --project "$PROJECT" \
   --note "$CHANGE_NOTE" \
   [--submodule "$PATH"]... \
@@ -157,7 +164,7 @@ pipeline. If `--codegraph` was selected, rebuild its generated index while the
 run lock is held before extraction or graph construction:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/codegraph.py" init --rebuild --project "$PROJECT"
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/codegraph.py" init --rebuild --project "$PROJECT"
 ```
 
 When `--isolate` is selected, replace `$PROJECT` for every subsequent command
@@ -169,10 +176,10 @@ snapshot and marker for resume. Invoke `--resume` against the original project;
 the marker redirects it to the retained snapshot.
 
 During graph construction, export its normalized function and edge data into
-plugin control state, then supply that file to `executor.py graph`:
+Skill control state, then supply that file to `executor.py graph`:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/codegraph.py" export --project "$PROJECT" \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/codegraph.py" export --project "$PROJECT" \
   --output "$PROJECT/fm_agent_skill/control/codegraph_export.json"
 ```
 
@@ -223,7 +230,7 @@ write the same artifact or report path.
 After each selector record is validated, merge it only through:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/incremental.py" merge-selection \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/incremental.py" merge-selection \
   --project "$PROJECT" --record "$SELECTOR_OUTPUT" --reason caller-propagation
 ```
 
@@ -231,7 +238,7 @@ Use `callee-propagation` or `spec-change` when that is the actual reason. Save
 an accepted incremental-plan response as JSON, then apply it only through:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/incremental.py" apply-plan \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/incremental.py" apply-plan \
   --project "$PROJECT" --plan "$PLAN_JSON"
 ```
 
@@ -262,9 +269,9 @@ Without that file, dispatch `fm-agent-static-edge-worker` first. It writes a
 candidate below `fm_agent/`; validate and promote it, then rerun graph:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" record-agent-edges \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/executor.py" record-agent-edges \
   --project "$PROJECT" --edges-file "$PROJECT/fm_agent/agent_static_edges_candidate.json"
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" graph --project "$PROJECT"
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/executor.py" graph --project "$PROJECT"
 ```
 
 This records `agent-static/best-effort` and makes only validated edges available
@@ -274,7 +281,7 @@ Immediately after `fm-phase-plan-worker` returns, normalize and validate its
 output before completing `project_understanding` or `refresh_plan`:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" normalize-phases \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/executor.py" normalize-phases \
   --project "$PROJECT"
 ```
 
@@ -282,16 +289,16 @@ The normalized file must use `modules[].source_files` and
 `depends_on_phases`. The default production inventory excludes test paths and
 does not create a pseudo-function for a declaration-only header.
 
-Build the plugin control index after extraction:
+Build the Skill control index after extraction:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" extract --project "$PROJECT"
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/executor.py" extract --project "$PROJECT"
 ```
 
 Build native phase-layer artifacts after a valid `phases.json`:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/executor.py" graph --project "$PROJECT" \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/executor.py" graph --project "$PROJECT" \
   [--codegraph-export "$PROJECT/fm_agent_skill/control/codegraph_export.json"]
 ```
 
@@ -301,7 +308,7 @@ with the affected callee IDs and do not send it to Bug Validator. For each
 direct CMake candidate, first run:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/probe_build.py" \
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/probe_build.py" \
   --project "$PROJECT" --bug-id "$BUG_ID"
 ```
 
@@ -312,5 +319,5 @@ Only after every phase gate succeeds may the agent call `pipeline.py complete`
 and release the lock as `idle`. Never modify business source or extracted
 function copies; write specifications only to their `.spec.json` and
 `.info.json` sidecars. Do not expose raw full diffs in chat. Execute and describe only
-capabilities documented by this plugin's shared skills and references; do not
+capabilities documented by this Skill's shared instructions and references; do not
 infer features from the original FM-Agent project.

@@ -9,6 +9,11 @@ analysis state, lock heartbeat, deterministic scripts, phase gates, retries,
 and user-visible status. Named semantic workers do only their assigned
 analysis. They cannot spawn workers or write `fm_agent_skill/` control state.
 
+Use only two target-project output roots: `fm_agent/` for FM-Agent-compatible
+analysis artifacts and `fm_agent_skill/` for mutable Skill state. Derive no
+target-project path from the Skill's installation or marketplace packaging.
+Give each worker only the exact allowed output paths from its job manifest.
+
 For every phase, call `pipeline.py phase-start`, create/start/join required
 jobs, validate them through `scheduler.py complete`, then call
 `pipeline.py phase-complete`. On success use `pipeline.py complete`; on a

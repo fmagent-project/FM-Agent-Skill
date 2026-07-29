@@ -13,7 +13,7 @@ from stage_gate import validate
 
 
 def save(target, record):
-    state.atomic_json(state.plugin_dir(target) / "active.json", record)
+    state.atomic_json(state.skill_dir(target) / "active.json", record)
 
 
 def load_active(target):
@@ -74,7 +74,7 @@ def main():
             record.update({"status": "succeeded", "ended_at": state.now()})
             commit = state.git(target, "rev-parse", "HEAD")
             file_hashes = state.source_snapshot(target, record["inputs"].get("submodules", []))
-            state.atomic_json(state.plugin_dir(target) / "baseline.json", {"schema_version": 3, "analysis_commit": commit, "observed_commit": commit, "observed_at": record["ended_at"], "source_snapshot": file_hashes, "file_hashes": file_hashes, "fingerprint": record["fingerprint"], "inputs": record["inputs"], "completed_at": record["ended_at"]})
+            state.atomic_json(state.skill_dir(target) / "baseline.json", {"schema_version": 3, "analysis_commit": commit, "observed_commit": commit, "observed_at": record["ended_at"], "source_snapshot": file_hashes, "file_hashes": file_hashes, "fingerprint": record["fingerprint"], "inputs": record["inputs"], "completed_at": record["ended_at"]})
         elif args.action == "fail": record.update({"status": "failed", "ended_at": state.now(), "failure": args.message})
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})
     record["updated_at"] = state.now(); save(target, record)

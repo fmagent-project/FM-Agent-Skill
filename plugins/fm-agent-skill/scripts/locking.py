@@ -12,8 +12,8 @@ from _common import project, state
 from config import load
 
 
-def lock_path(target): return state.plugin_dir(target) / "active.lock"
-def status_path(target): return state.plugin_dir(target) / "active.json"
+def lock_path(target): return state.skill_dir(target) / "active.lock"
+def status_path(target): return state.skill_dir(target) / "active.json"
 def read_lock(target): return state.read_json(lock_path(target), {})
 
 
@@ -28,7 +28,7 @@ def terminal_active(target):
 
 
 def acquire(target, force_stale=False):
-    root = state.plugin_dir(target); root.mkdir(parents=True, exist_ok=True)
+    root = state.skill_dir(target); root.mkdir(parents=True, exist_ok=True)
     payload = {"pid": os.getpid(), "host": socket.gethostname(), "status": "running", "started_at": state.now(), "heartbeat_at": state.now()}
     try:
         fd = os.open(lock_path(target), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

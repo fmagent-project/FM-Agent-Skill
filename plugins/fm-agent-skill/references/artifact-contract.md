@@ -3,9 +3,7 @@
 All JSON is UTF-8 and atomically replaced. Paths are repository-relative with
 forward slashes.
 
-`fm_agent_plugin/` is a legacy test-output directory and is never a valid Skill
-artifact. A full cleanup removes it; all mutable Skill state lives under
-`fm_agent_skill/`.
+All mutable Skill state lives under `fm_agent_skill/`.
 
 - `fm_agent/phases.json` uses FM-Agent's phase/module form, including source
   files and inter-phase dependencies.
@@ -45,12 +43,12 @@ artifact. A full cleanup removes it; all mutable Skill state lives under
 - `fm_agent/trace/events.jsonl` records stage and model events. Write full
   prompt/response material below `trace/payloads/` only when full tracing is
   enabled.
-- `fm_agent_skill/control/analysis_index.json` is the plugin-owned function
+- `fm_agent_skill/control/analysis_index.json` is the Skill-owned function
   identity/hash inventory. Precision, incremental snapshots/diff/selection,
-  `graph_edges.json`, and validated `agent_static_edges.json` are plugin-owned
+  `graph_edges.json`, and validated `agent_static_edges.json` are Skill-owned
   control artifacts. Active analysis state, locks, scheduler jobs, and probe-build results also belong in
   `fm_agent_skill/`, never in `fm_agent/`. Only the Coordinator and
-  deterministic scripts may write plugin-owned control state.
+  deterministic scripts may write Skill-owned control state.
 
 ## Sidecar schemas
 

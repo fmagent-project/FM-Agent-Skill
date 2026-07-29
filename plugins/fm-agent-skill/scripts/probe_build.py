@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a CMake project in a plugin-owned directory for one bug probe."""
+"""Build a CMake project in a Skill-owned directory for one bug probe."""
 from __future__ import annotations
 
 import argparse
@@ -47,7 +47,7 @@ def main() -> None:
     if not (target / "CMakeLists.txt").is_file():
         parser.error("isolated CMake probes require CMakeLists.txt in --project")
 
-    build_dir = state.plugin_dir(target) / "probes" / safe_component(args.bug_id) / "build"
+    build_dir = state.skill_dir(target) / "probes" / safe_component(args.bug_id) / "build"
     if build_dir.exists():
         shutil.rmtree(build_dir)
     build_dir.parent.mkdir(parents=True, exist_ok=True)

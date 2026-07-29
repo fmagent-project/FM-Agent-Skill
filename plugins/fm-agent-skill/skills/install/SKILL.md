@@ -8,7 +8,7 @@ description: Set up or verify the FM-Agent analysis capability and its local det
 Treat installation as an environment-preparation workflow, not an analysis run.
 
 Read [runtime-path.md](../../references/runtime-path.md) and resolve
-`FM_AGENT_PLUGIN_ROOT` before invoking a script.
+`FM_AGENT_SKILL_ROOT` before invoking a script.
 
 This shared skill must work in both Codex and Claude Code. Never use
 `CLAUDE_SKILL_DIR`.
@@ -18,7 +18,7 @@ First identify the target Git repository.
 Then run:
 
 ```bash
-<python3> "$FM_AGENT_PLUGIN_ROOT/scripts/preflight.py" --project "$PROJECT"
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/preflight.py" --project "$PROJECT"
 ```
 
 Verify that the target is a Git repository with a resolvable `HEAD` and that it
@@ -34,9 +34,9 @@ Never print API keys or copy `.env` contents.
 Never install packages, edit configuration files, or modify provider settings
 without explicit user authorization.
 
-Do not run `main.py` as a substitute for this plugin.
+Do not run `main.py` as a substitute for this Skill.
 
-The plugin skills orchestrate the FM-Agent workflow.
+The Skill's entry points orchestrate the FM-Agent workflow.
 
 The scripts are implementation tools that manage state, artifacts, and
 validation.

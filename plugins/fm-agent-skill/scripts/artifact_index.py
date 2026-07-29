@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and validate the plugin-owned source/function inventory."""
+"""Create and validate the Skill-owned source/function inventory."""
 from __future__ import annotations
 
 import argparse
@@ -34,7 +34,7 @@ def build(target, scope):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build or validate the plugin control analysis index.")
+    parser = argparse.ArgumentParser(description="Build or validate the Skill control analysis index.")
     parser.add_argument("action", choices=("build", "validate")); parser.add_argument("--project", required=True); parser.add_argument("--submodule", action="append", default=[])
     args = parser.parse_args(); target = project(args)
     if args.action == "build": result = build(target, args.submodule); code = 0 if result["functions"] else 2

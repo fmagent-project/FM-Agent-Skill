@@ -18,7 +18,7 @@ ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 def _safe_id(value):
     if not ID.fullmatch(value or ""): raise ValueError("invalid job id")
     return value
-def _path(target, job_id): return state.plugin_dir(target) / "jobs" / f"{_safe_id(job_id)}.json"
+def _path(target, job_id): return state.skill_dir(target) / "jobs" / f"{_safe_id(job_id)}.json"
 def _load(target, job_id):
     job = state.read_json(_path(target, job_id), {})
     if not isinstance(job, dict) or job.get("id") != job_id: raise ValueError("job does not exist")
@@ -36,7 +36,7 @@ def _artifact(value):
     if path.is_absolute() or ".." in path.parts: raise ValueError("artifact paths must stay under extracted_functions")
     return path.as_posix()
 def _limit(target, payload):
-    config = state.read_json(state.plugin_dir(target) / "config.json", {})
+    config = state.read_json(state.skill_dir(target) / "config.json", {})
     default = config.get("bug_validation_max_attempts", 1) if isinstance(config, dict) and payload.get("type") == "bug_validate" else (config.get("retries", 5) if isinstance(config, dict) else 5)
     value = payload.get("max_attempts", default)
     if not isinstance(value, int) or value < 1: raise ValueError("max_attempts must be a positive integer")
@@ -74,7 +74,7 @@ def create(target, payload):
     if isinstance(payload.get("input"), dict): job["input"] = payload["input"]
     _save(target, job); return job
 def ready(target):
-    root = state.plugin_dir(target) / "jobs"; result = []
+    root = state.skill_dir(target) / "jobs"; result = []
     for path in sorted(root.glob("*.json")) if root.is_dir() else []:
         job = state.read_json(path, {})
         if not isinstance(job, dict) or job.get("status") != "queued": continue
@@ -102,7 +102,7 @@ def transition(target, job_id, action, result, message, failure_class):
         job["status"] = "queued"; job["requeued_at"] = state.now()
     _save(target, job); return job
 def recover(target):
-    root = state.plugin_dir(target) / "jobs"; succeeded, retryable = [], []
+    root = state.skill_dir(target) / "jobs"; succeeded, retryable = [], []
     for path in sorted(root.glob("*.json")) if root.is_dir() else []:
         job = state.read_json(path, {})
         if not isinstance(job, dict) or job.get("status") != "running": continue

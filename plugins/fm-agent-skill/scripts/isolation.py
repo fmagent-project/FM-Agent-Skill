@@ -19,7 +19,7 @@ MARKER = "isolation.json"
 
 
 def marker_path(target: Path) -> Path:
-    return state.plugin_dir(target) / MARKER
+    return state.skill_dir(target) / MARKER
 
 
 def marker(target: Path) -> dict:
