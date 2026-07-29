@@ -6,7 +6,8 @@ forward slashes.
 All mutable Skill state lives under `fm_agent_skill/`.
 
 - `fm_agent/phases.json` uses FM-Agent's phase/module form, including source
-  files and inter-phase dependencies.
+  files and inter-phase dependencies. Test sources are excluded from this
+  contract and from all analysis inputs.
 - `fm_agent/fm_agent_file_list.json` is the sorted current set of extracted
   function-source paths, relative to `extracted_functions/`. Do not list
   metadata sidecars.
@@ -26,7 +27,9 @@ All mutable Skill state lives under `fm_agent_skill/`.
   This is the native call-graph artifact; do not add `fm_agent/call_graph.json`
   or merge phases unless `one_phase` is enabled.
 - `fm_agent/logic_verification_results/` has one result per extracted function.
-  A verdict is `MATCH`, direct `MISMATCH`, `DEPENDENCY_RISK`, or `ERROR`.
+  A verdict is `MATCH`, direct `MISMATCH`, `DEPENDENCY_RISK`, `INCONCLUSIVE`,
+  or `ERROR`. `MATCH` is valid only for a high-confidence specification with
+  external evidence.
   Dependency risk records affected callers but is not a direct bug candidate.
 - `fm_agent/bug_validation/` is generated only when a direct `MISMATCH` is
   probed. Confirmed candidates have a detail Markdown file, result JSON, and
@@ -55,7 +58,7 @@ All mutable Skill state lives under `fm_agent_skill/`.
 `<function>.<ext>.spec.json` is exactly:
 
 ```json
-{"signature":"...","pre_condition":"...","post_condition":"..."}
+{"signature":"...","pre_condition":"...","post_condition":"...","evidence":[{"kind":"header|domain_knowledge|caller|implementation-derived","source":"...","claims":["..."]}],"confidence":"high|low"}
 ```
 
 `<function>.<ext>.info.json` is exactly `{"callees": [...]}`. Every callee is
@@ -75,7 +78,9 @@ function occurs in one phase-layer artifact only.
 Verification result: `{function, function_id, source_hash, verdict, gaps?,
 error?}`. `MISMATCH` means a local implementation/spec violation;
 `DEPENDENCY_RISK` means a caller is affected by a callee mismatch but has no
-independently established local violation. Identity and hash must match the
+independently established local violation. `INCONCLUSIVE` records that the
+available contract is implementation-derived/low-confidence and cannot prove a
+match. Identity and hash must match the
 control analysis index.
 
 Finding/bug result records function identity, spec claim, implementation

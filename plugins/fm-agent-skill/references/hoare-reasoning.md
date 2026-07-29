@@ -12,12 +12,21 @@ postcondition. A mismatch must retain the triggering statements, derived
 postcondition, and reason. Malformed spec, model/tool failure, or unparseable
 output is `ERROR`, not `MATCH` or `MISMATCH`; proceed with other functions.
 
+Before proving a result, inspect the sidecar's `confidence` and `evidence`.
+`MATCH` requires a `high`-confidence contract grounded in header/public API,
+domain knowledge, or caller evidence. A low-confidence,
+`implementation-derived` rule may guide investigation but cannot prove a
+match; emit `INCONCLUSIVE` and name the missing external evidence. Do not turn
+an implementation constant, comparison, or formula into proof obligation
+without that support.
+
 Use at most `MAX_SPC_ITER = 5` attempts for a postcondition/spec check unless a
 smaller configured retry limit applies. Emit a verification JSON object matching
 [artifact-contract.md](artifact-contract.md): `MATCH` for a proved check,
 `MISMATCH` for a reasoned local violation, `DEPENDENCY_RISK` when only a
-callee's direct mismatch affects the caller's outcome, and `ERROR` for failure
-to reason. Do not manufacture a caller `MISMATCH` solely from a callee result.
+callee's direct mismatch affects the caller's outcome, `INCONCLUSIVE` for an
+insufficiently evidenced contract, and `ERROR` for failure to reason. Do not
+manufacture a caller `MISMATCH` solely from a callee result.
 
 For an input parser/converter, reject a `MATCH` when its specification excludes
 malformed input solely by assuming validity, while an in-scope caller can pass

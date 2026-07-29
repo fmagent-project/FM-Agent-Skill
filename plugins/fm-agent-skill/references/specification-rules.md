@@ -6,6 +6,26 @@ postconditions, errors, data/format/range invariants, and cross-path
 invariants. A defect is a gap between that contract and implementation; do not
 weaken the contract to document a bug.
 
+## Evidence and confidence rule
+
+Treat implementation literals, comparison operators, branch thresholds, and
+formulas as observations, not contract facts. Promote one of them into a
+precondition or postcondition only when a header/public API, supplied domain
+knowledge, or caller requirement supports that rule. Record every
+contract claim in the sidecar's `evidence` array with its source and kind.
+
+When no such external support exists, record the candidate rule as
+`implementation-derived` with `confidence: "low"`. It is a lead for review,
+not a proved behavioral requirement. A low-confidence sidecar must never yield
+`MATCH`: verification returns `INCONCLUSIVE` unless it can establish a direct
+contradiction from externally supported facts. Do not infer that a constant,
+comparison, or formula is intended merely because the current implementation
+uses it.
+
+Do not read tests when extracting, planning phases, generating specifications,
+or verifying functions. This matches FM-Agent's source-analysis scope: tests
+are neither implementation targets nor specification evidence.
+
 ## Input-domain rule
 
 Before writing a contract, trace each parameter backward to its callers and
@@ -44,7 +64,7 @@ source. Store its contract in paired sidecars instead:
 <unchanged extracted source>
 
 // fm_agent/extracted_functions/.../parse.cpp.spec.json
-{"signature":"parse(std::string_view)","pre_condition":"...","post_condition":"..."}
+{"signature":"parse(std::string_view)","pre_condition":"...","post_condition":"...","evidence":[{"kind":"header","source":"include/parse.hpp","claims":["rejects trailing input"]}],"confidence":"high"}
 
 // fm_agent/extracted_functions/.../parse.cpp.info.json
 {"callees":[{"name":"...","signature":"...","pre_condition":"...","post_condition":"..."}]}

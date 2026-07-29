@@ -51,17 +51,17 @@ def _is_test_source(rel: str) -> bool:
     return any(part in {"test", "tests", "testing", "fixtures"} for part in parts[:-1]) or name.startswith(("test_", "test-")) or "_test." in name or "_tests." in name
 
 
-def _sources(target: Path, submodules: list[str], include_tests: bool) -> list[Path]:
+def _sources(target: Path, submodules: list[str]) -> list[Path]:
     result = []
     for source in state.source_files(target):
         rel = source.relative_to(target).as_posix()
         if submodules and not any(rel == item.rstrip("/") or rel.startswith(item.rstrip("/") + "/") for item in submodules): continue
-        if not include_tests and _is_test_source(rel): continue
+        if _is_test_source(rel): continue
         result.append(source)
     return result
 
 
-def normalize_phases(target: Path, include_tests: bool = False) -> dict:
+def normalize_phases(target: Path) -> dict:
     """Write only the current FM-Agent phase/module schema.
 
     Legacy skill fixtures used `sources`/`dependencies`; normalize them before
@@ -70,7 +70,7 @@ def normalize_phases(target: Path, include_tests: bool = False) -> dict:
     path = state.fm_dir(target) / "phases.json"; raw = state.read_json(path, {})
     phases = raw.get("phases") if isinstance(raw, dict) else None
     if not isinstance(phases, list): raise ValueError("phases.json must contain a phases array")
-    normalized = []
+    planned = []
     for position, phase in enumerate(phases, 1):
         if not isinstance(phase, dict): raise ValueError("every phase must be an object")
         number = phase.get("phase", position)
@@ -89,24 +89,25 @@ def normalize_phases(target: Path, include_tests: bool = False) -> dict:
                 candidate = (target / source).resolve()
                 if target not in candidate.parents or not candidate.is_file(): raise ValueError(f"phase {number} references missing source: {source}")
                 rel = candidate.relative_to(target).as_posix()
-                if include_tests or not _is_test_source(rel): sources.append(rel)
+                if not _is_test_source(rel):
+                    sources.append(rel)
             if sources: clean_modules.append({"name": str(module.get("name", f"phase-{number}")), "description": str(module.get("description", "")), "source_files": sorted(set(sources))})
         dependencies = phase.get("depends_on_phases", phase.get("dependencies", []))
         if not isinstance(dependencies, list) or not all(isinstance(value, int) and value > 0 for value in dependencies): raise ValueError(f"phase {number} has invalid dependencies")
-        if clean_modules:
-            normalized.append({"original_phase": number, "name": str(phase.get("name", f"phase-{number}")), "description": str(phase.get("description", "")), "modules": clean_modules, "dependencies": sorted(set(dependencies))})
-    if not normalized: raise ValueError("no production phases remain after normalization")
-    numbers = {item["original_phase"]: index for index, item in enumerate(normalized, 1)}
-    normalized = [{"phase": index, "name": item["name"], "description": item["description"], "modules": item["modules"], "depends_on_phases": [numbers[value] for value in item["dependencies"] if value in numbers and numbers[value] < index]} for index, item in enumerate(normalized, 1)]
-    data = {"project": target.name, "languages": sorted({source.suffix.lower().lstrip(".") for source in _sources(target, [], include_tests)}), "file_extensions": sorted({source.suffix.lower().lstrip(".") for source in _sources(target, [], include_tests)}), "phases": normalized}
+        planned.append({"original_phase": number, "name": str(phase.get("name", f"phase-{number}")), "description": str(phase.get("description", "")), "modules": clean_modules, "dependencies": sorted(set(dependencies))})
+    production = [item for item in planned if item["modules"]]
+    if not production: raise ValueError("no production phases remain after normalization")
+    numbers = {item["original_phase"]: index for index, item in enumerate(production, 1)}
+    normalized = [{"phase": index, "name": item["name"], "description": item["description"], "modules": item["modules"], "depends_on_phases": [numbers[value] for value in item["dependencies"] if value in numbers and numbers[value] < index]} for index, item in enumerate(production, 1)]
+    data = {"project": target.name, "languages": sorted({source.suffix.lower().lstrip(".") for source in _sources(target, [])}), "file_extensions": sorted({source.suffix.lower().lstrip(".") for source in _sources(target, [])}), "phases": normalized}
     state.atomic_json(path, data); return {"phase_count": len(normalized), "phases": [item["phase"] for item in normalized]}
 
 
-def extract(target: Path, submodules: list[str], include_tests: bool = False) -> dict:
+def extract(target: Path, submodules: list[str]) -> dict:
     root = state.fm_dir(target) / "extracted_functions"
     if root.exists(): shutil.rmtree(root)
     manifest = []
-    for source in _sources(target, submodules, include_tests):
+    for source in _sources(target, submodules):
         rel = source.relative_to(target).as_posix()
         try: functions = _python_functions(source) if source.suffix.lower() == ".py" else _fallback_functions(source)
         except (SyntaxError, OSError): functions = _fallback_functions(source)
@@ -246,7 +247,7 @@ def preserve_specs(target: Path) -> dict:
         if spec.is_file() and info.is_file():
             rel = artifact.relative_to(root).as_posix()
             saved[rel] = {"source_hash": state.file_hash(artifact), "spec": state.read_json(spec, {}), "info": state.read_json(info, {})}
-    files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in _sources(target, [], False)}
+    files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in _sources(target, [])}
     data = {"schema_version": 1, "generated_at": state.now(), "files": files, "artifacts": saved}
     state.atomic_json(state.control_dir(target) / "preserved_specs.json", data); return {"preserved": len(saved)}
 
@@ -275,7 +276,7 @@ def diff(target: Path) -> dict:
     manifest = state.read_json(state.fm_dir(target) / "extraction_manifest.json", {}).get("functions", [])
     source_for = {item.get("artifact"): item.get("source_path") for item in manifest if isinstance(item, dict)}
     old_files = preserved.get("files", {}) if isinstance(preserved.get("files", {}), dict) else {}
-    current_files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in _sources(target, [], False)}
+    current_files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in _sources(target, [])}
     changed_files = {path for path in set(old_files) | set(current_files) if old_files.get(path) != current_files.get(path)}
     added = sorted(key for key in current if key not in old)
     removed = sorted(key for key in old if key not in current)
@@ -311,10 +312,10 @@ def select(target: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run deterministic FM-Agent Skill executor actions without original FM-Agent.")
-    parser.add_argument("action", choices=("normalize-phases", "extract", "graph", "record-agent-edges", "preserve-specs", "restore-specs", "diff", "select")); parser.add_argument("--project", required=True); parser.add_argument("--submodule", action="append", default=[]); parser.add_argument("--include-tests", action="store_true"); parser.add_argument("--codegraph-export"); parser.add_argument("--edges-file")
+    parser.add_argument("action", choices=("normalize-phases", "extract", "graph", "record-agent-edges", "preserve-specs", "restore-specs", "diff", "select")); parser.add_argument("--project", required=True); parser.add_argument("--submodule", action="append", default=[]); parser.add_argument("--codegraph-export"); parser.add_argument("--edges-file")
     args = parser.parse_args(); target = project(args)
     if args.action == "record-agent-edges" and not args.edges_file: parser.error("record-agent-edges requires --edges-file")
-    result = {"normalize-phases": lambda: normalize_phases(target, args.include_tests), "extract": lambda: extract(target, args.submodule, args.include_tests), "graph": lambda: graph(target, Path(args.codegraph_export) if args.codegraph_export else None), "record-agent-edges": lambda: record_agent_edges(target, Path(args.edges_file)), "preserve-specs": lambda: preserve_specs(target), "restore-specs": lambda: restore_specs(target), "diff": lambda: diff(target), "select": lambda: select(target)}[args.action]()
+    result = {"normalize-phases": lambda: normalize_phases(target), "extract": lambda: extract(target, args.submodule), "graph": lambda: graph(target, Path(args.codegraph_export) if args.codegraph_export else None), "record-agent-edges": lambda: record_agent_edges(target, Path(args.edges_file)), "preserve-specs": lambda: preserve_specs(target), "restore-specs": lambda: restore_specs(target), "diff": lambda: diff(target), "select": lambda: select(target)}[args.action]()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

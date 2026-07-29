@@ -221,6 +221,11 @@ outputs, and required reference files. A worker must return its concise JSON
 summary; workers cannot spawn other workers. The Coordinator is the only
 writer of `fm_agent_skill/jobs/` and all other control state.
 
+For each specification job, provide only the assigned extracted artifacts and
+permitted header, domain, and caller evidence. Do not read test files. Require
+the worker to emit evidence and confidence in every spec sidecar; never
+schedule a `MATCH` from a low-confidence or implementation-derived contract.
+
 For incremental planning, `fm-incremental-spec-plan-worker` returns an update
 plan in its response and writes no files. Record that response through
 `scheduler.py complete --result-json`, validate it, then serially apply sidecar
@@ -285,9 +290,9 @@ output before completing `project_understanding` or `refresh_plan`:
   --project "$PROJECT"
 ```
 
-The normalized file must use `modules[].source_files` and
-`depends_on_phases`. The default production inventory excludes test paths and
-does not create a pseudo-function for a declaration-only header.
+The normalized file must use `modules[].source_files` and `depends_on_phases`.
+Test paths are excluded from every analysis stage, and no pseudo-function is
+created for a declaration-only header.
 
 Build the Skill control index after extraction:
 

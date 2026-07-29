@@ -17,9 +17,12 @@ import subprocess
 
 SOURCE_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".cu", ".go", ".h", ".hpp", ".java", ".js", ".jsx", ".py", ".rs", ".ts", ".tsx", ".ets", ".erl"}
 METADATA_SIDECAR_SUFFIXES = (".spec.json", ".info.json")
-VERDICTS = {"MATCH", "MISMATCH", "DEPENDENCY_RISK", "ERROR"}
-SPEC_FIELDS = {"signature", "pre_condition", "post_condition"}
+VERDICTS = {"MATCH", "MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"}
+SPEC_FIELDS = {"signature", "pre_condition", "post_condition", "evidence", "confidence"}
 CALLEE_FIELDS = {"name", "signature", "pre_condition", "post_condition"}
+EXTERNAL_EVIDENCE_KINDS = {"header", "domain_knowledge", "caller"}
+EVIDENCE_KINDS = EXTERNAL_EVIDENCE_KINDS | {"implementation-derived"}
+SPEC_CONFIDENCE = {"high", "low"}
 PHASES = {
     "full": ["preflight", "project_understanding", "phase_cleanup", "extraction", "call_graph", "specification", "verification", "bug_validation", "finalize"],
     "incremental": ["validate_baseline", "refresh_plan", "preserve_specs", "diff", "rebuild_graph", "select_scope", "update_specs", "verify_affected", "bug_validation", "finalize"],
@@ -280,8 +283,39 @@ def is_metadata_sidecar(path: Path | str) -> bool:
     return str(path).replace("\\", "/").endswith(METADATA_SIDECAR_SUFFIXES)
 
 
+def _valid_evidence_item(item) -> bool:
+    return (
+        isinstance(item, dict)
+        and set(item) == {"kind", "source", "claims"}
+        and item.get("kind") in EVIDENCE_KINDS
+        and isinstance(item.get("source"), str)
+        and bool(item["source"].strip())
+        and isinstance(item.get("claims"), list)
+        and item["claims"]
+        and all(isinstance(claim, str) and claim.strip() for claim in item["claims"])
+    )
+
+
 def _valid_spec(data) -> bool:
-    return isinstance(data, dict) and set(data) == SPEC_FIELDS and all(isinstance(data[field], str) for field in SPEC_FIELDS)
+    if not isinstance(data, dict) or set(data) != SPEC_FIELDS:
+        return False
+    if not all(isinstance(data[field], str) for field in ("signature", "pre_condition", "post_condition")):
+        return False
+    evidence = data.get("evidence")
+    if not isinstance(evidence, list) or not evidence or not all(_valid_evidence_item(item) for item in evidence):
+        return False
+    confidence = data.get("confidence")
+    kinds = {item["kind"] for item in evidence}
+    if confidence not in SPEC_CONFIDENCE:
+        return False
+    if confidence == "high":
+        return bool(kinds & EXTERNAL_EVIDENCE_KINDS) and "implementation-derived" not in kinds
+    return "implementation-derived" in kinds
+
+
+def spec_confidence(artifact: Path) -> str | None:
+    spec = read_json(Path(f"{artifact}.spec.json"), None)
+    return spec.get("confidence") if _valid_spec(spec) else None
 
 
 def _valid_info(data) -> bool:
@@ -387,6 +421,8 @@ def function_artifacts_ready(project: Path, functions: list[dict], submodules: l
         result_hash = result.get("source_hash")
         if result_hash != source_hash:
             return False, f"verification hash mismatch for {function_id}"
+        if result.get("verdict") == "MATCH" and spec_confidence(artifact) != "high":
+            return False, f"low-confidence specification cannot prove MATCH for {function_id}"
     actual_artifacts = _current_function_artifacts(extracted, submodules)
     actual_results = {path.relative_to(results).as_posix() for path in results.rglob("*.json") if _in_selected_scope(path.relative_to(results).with_suffix("").as_posix(), submodules)} if results.is_dir() else set()
     stale_artifacts = actual_artifacts - expected_artifacts
@@ -408,6 +444,9 @@ def selected_verification_ready(project: Path, functions: list[dict]) -> tuple[b
         result = read_json(results / Path(rel).with_suffix(".json"), {})
         if result.get("function_id") != function_id or result.get("source_hash") != source_hash or result.get("verdict") not in VERDICTS:
             return False, f"missing or stale selected verification result for {function_id}"
+        artifact = fm_dir(project) / "extracted_functions" / rel
+        if result.get("verdict") == "MATCH" and spec_confidence(artifact) != "high":
+            return False, f"low-confidence specification cannot prove MATCH for {function_id}"
     return True, ""
 
 
