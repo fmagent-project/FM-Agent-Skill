@@ -263,8 +263,15 @@ class; if its status is `retryable`, wait 10 seconds and call
 batches immediately; wait 10 seconds only when it made no progress. A retried
 spec batch preserves valid paired sidecars and repairs only incomplete assigned
 artifacts. A verification-level failure is a valid `ERROR` result, not a retry;
-retry only when the Agent or result artifact itself failed. Bug Validator jobs
-have one total attempt by default. `input`, `semantic`, and `cancelled`
+retry only when the Agent or result artifact itself failed. Bug Validator runtime
+failures retry up to five attempts by default. A completed `not_reproduced`,
+`rejected`, or `inconclusive` Bug Validator result is not a runtime failure:
+requeue its same job immediately until it has three completed negative probes
+by default, preserving each probe in the result's `attempts` array. A
+`confirmed` result finishes immediately. Every new Bug Validator job must
+assign exactly one `fm_agent/bug_validation/*.result.json` required output;
+each completion appends the current attempt with the receipt classification.
+`input`, `semantic`, and `cancelled`
 failures are terminal: leave dependents unscheduled and call `pipeline.py fail`.
 On resume call `scheduler.py recover` before `scheduler.py ready`; it retains a
 stale running job only if current outputs validate, otherwise requeues it in

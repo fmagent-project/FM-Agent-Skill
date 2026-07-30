@@ -124,7 +124,7 @@ def fingerprint(project: Path, one_phase: bool, submodules: list[str], extra_edg
     # an analysis.  It must not invalidate baselines or interrupted runs.
     fingerprint_config = dict(config or {})
     # Scheduling changes alter resource use, not the meaning of an analysis.
-    for key in ("resume_grace_seconds", "scheduler_executor", "max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "spec_batch_size", "retries", "lock_ttl_seconds", "bug_validation_max_attempts"):
+    for key in ("resume_grace_seconds", "scheduler_executor", "max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "spec_batch_size", "retries", "lock_ttl_seconds", "bug_validation_max_attempts", "bug_validation_negative_retries"):
         fingerprint_config.pop(key, None)
     inputs = {
         "one_phase": bool(one_phase),

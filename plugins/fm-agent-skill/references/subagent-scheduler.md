@@ -27,8 +27,11 @@ failures use `scheduler.py fail`; if retryable, call `scheduler.py retry` after
 10 seconds, up to configured `retries`. For a specification layer, retry
 remaining batches immediately when any paired sidecar became valid; otherwise
 wait 10 seconds. `input`, `semantic`, and `cancelled` are terminal. A semantic
-verification error is a valid `ERROR` result, not a retry. Bug Validator has
-one total attempt by default. On resume, call `scheduler.py recover` before
+verification error is a valid `ERROR` result, not a retry. Bug Validator retries
+runtime failures up to five attempts by default. A completed negative Bug
+Validator result requeues the same job immediately twice by default, yielding
+three preserved probes; a confirmation finishes immediately. On resume, call
+`scheduler.py recover` before
 `scheduler.py ready`; valid stale outputs finish their job, invalid stale jobs
 requeue in place when attempts remain.
 

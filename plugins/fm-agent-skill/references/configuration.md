@@ -19,7 +19,8 @@ one Bug Validator, and two read-only incremental plan workers. Configure these
 through `max_active_subagents`, `spec_concurrency`, `verify_concurrency`,
 `bug_validation_concurrency`, and `read_only_plan_concurrency`.
 `spec_batch_size` defaults to `1`; `bug_validation_max_attempts` defaults to
-`1`, matching FM-Agent's Bug Validator retry limit. These scheduling and retry
+`5` for runtime failures, and `bug_validation_negative_retries` defaults to
+`2` additional completed negative probes. These scheduling and retry
 limits are operational only and are excluded from the analysis fingerprint.
 
 Every analysis creates one detached Git worktree from a private snapshot

@@ -120,8 +120,9 @@ This follows FM-Agent's worker semantics: phase planning and domain context
 retry after ten seconds; a specification layer immediately retries only its
 remaining batches after partial progress, but waits ten seconds after no
 progress. Valid sidecars are retained. A verification reasoning problem is a
-valid `ERROR` result rather than a scheduling retry. Bug Validator has one
-total attempt by default, matching FM-Agent.
+valid `ERROR` result rather than a scheduling retry. Bug Validator retries
+runtime failures up to five attempts and repeats a completed negative result
+twice by default, preserving all three probes.
 
 `input`, `semantic`, and `cancelled` failures are terminal. They leave
 dependents unscheduled and fail the current phase without discarding valid,
@@ -344,7 +345,7 @@ full、incremental 和 resume 都会在每个阶段前显示“当前阶段/总�
 ## Claude worker 调度、失败与恢复
 
 Coordinator 是 `fm_agent_skill/` 的唯一写入者。它按阶段串行推进，在同一调用层内最多并发
-全局最多运行 4 个独立 worker（规格 2、验证 4、Bug Validator 1、只读增量计划 2）；调度器在启动前强制占用名额，join 后写入阶段回执并通过 gate 才能进入下一阶段。
+全局最多运行 10 个独立 worker（规格 4、验证 8、Bug Validator 1、只读增量计划 2）；调度器在启动前强制占用名额，join 后写入阶段回执并通过 gate 才能进入下一阶段。
 每个语义单元有固定 job id，保存在 `fm_agent_skill/jobs/<job-id>.json`。
 
 超时、限流、Agent 工具失败、缺失产物或无效产物会成为 `retryable`。Coordinator 会在**同一个
@@ -353,7 +354,7 @@ domain context 每次失败后等待 10 秒；spec 阶段若已得到部分有�
 无任何进展才等待 10 秒。有效 sidecar 会保留。
 
 验证推理本身失败时应写出有效的 `ERROR` result，而不是重复调度；只有 Agent 或结果产物失败才
-重试。Bug Validator 默认总共只尝试 1 次。`input`、`semantic` 和 `cancelled` 是终止失败：下游
+重试。Bug Validator 的运行或产物失败最多尝试 5 次；正常完成但未复现或证据不足时会在同一 job 内额外复测 2 次，并保留全部 probe 证据。`input`、`semantic` 和 `cancelled` 是终止失败：下游
 不会启动，当前阶段失败，但已有独立有效产物会保留。resume 前会先回收遗留 `running` job：产物有效
 则直接成功，否则在次数未耗尽时原地转为 `retryable`。
 

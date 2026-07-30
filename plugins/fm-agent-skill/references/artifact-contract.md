@@ -86,7 +86,14 @@ match. Identity and snapshot commit must match the current analysis worktree.
 
 Finding/bug result records function identity, spec claim, implementation
 evidence, trigger/probe, output, and status `candidate`, `confirmed`,
-`rejected`, or `error`. `summary.json` counts each status.
+`rejected`, or `error`. Its `attempts` array retains every Bug Validator probe
+with ordinal, classification, trigger/probe, output, and timestamp; an
+unreproduced candidate becomes final only after the configured negative probes.
+`summary.json` counts each status.
+
+Every new Bug Validator job assigns exactly one
+`fm_agent/bug_validation/*.result.json` output. Its current receipt
+classification must equal the classification in the last appended attempt.
 
 `fm_agent_skill/active.json` is the sole current-analysis record. It contains
 mode, phase status, inputs, fingerprint, timestamps, an immutable

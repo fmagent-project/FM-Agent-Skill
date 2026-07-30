@@ -16,6 +16,8 @@ FAILURE_CLASSES = RETRYABLE_FAILURES | {"input", "semantic", "cancelled"}
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 MAX_REPORT_BYTES = 4096
 REPORT_KEYS = {"job_id", "status", "outputs", "verdict", "classification", "escalation", "counts", "summary", "plan_path"}
+BUG_CLASSIFICATIONS = {"confirmed", "not_reproduced", "rejected", "inconclusive"}
+BUG_NEGATIVE_CLASSIFICATIONS = BUG_CLASSIFICATIONS - {"confirmed"}
 TYPE_CAP_KEYS = {
     "spec_batch": "spec_concurrency",
     "verify_function": "verify_concurrency",
@@ -94,17 +96,25 @@ def _validate_report(job, result):
     if "outputs" in result and (not isinstance(result["outputs"], list) or not all(isinstance(item, str) for item in result["outputs"])): return "worker report outputs must be a string array"
     if "verdict" in result and result["verdict"] not in state.VERDICTS: return "worker report has invalid verdict"
     if "summary" in result and (not isinstance(result["summary"], str) or len(result["summary"]) > 500): return "worker report summary must be at most 500 characters"
+    if job["type"] == "bug_validate" and result.get("classification") not in BUG_CLASSIFICATIONS: return "Bug Validator report requires a valid classification"
     if job["type"] == "incremental_spec_plan":
         expected = f"fm_agent_skill/worker_reports/{job['id']}.json"
         if result.get("plan_path") != expected: return "incremental plan report must name its assigned plan_path"
     return None
 def _limit(target, payload):
     config = state.read_json(state.skill_dir(target) / "config.json", {})
-    default = config.get("bug_validation_max_attempts", 1) if isinstance(config, dict) and payload.get("type") == "bug_validate" else (config.get("retries", 5) if isinstance(config, dict) else 5)
+    # Pre-receipt jobs retain their historical single Bug Validator attempt.
+    default = (config.get("bug_validation_max_attempts", 5) if "phase" in payload else 1) if isinstance(config, dict) and payload.get("type") == "bug_validate" else (config.get("retries", 5) if isinstance(config, dict) else 5)
     value = payload.get("max_attempts", default)
     if not isinstance(value, int) or value < 1: raise ValueError("max_attempts must be a positive integer")
     return value
-def _validate(target, job):
+def _negative_attempts(target, payload):
+    config = state.read_json(state.skill_dir(target) / "config.json", {})
+    default = config.get("bug_validation_negative_retries", 2) if isinstance(config, dict) else 2
+    value = payload.get("negative_retries", default)
+    if not isinstance(value, int) or value < 0: raise ValueError("negative_retries must be a non-negative integer")
+    return value + 1
+def _validate(target, job, result=None):
     missing = [item for item in job.get("required_outputs", []) if not (target / item).exists()]
     if missing: return "missing required worker output: " + ", ".join(missing)
     if job["type"] in {"spec_batch", "reconcile_caller_info"}:
@@ -118,10 +128,24 @@ def _validate(target, job):
     if job["type"] == "domain_context":
         ok, reason = state.specification_context_ready(target)
         if not ok: return reason
+    if job["type"] == "bug_validate" and not job.get("legacy_contract"):
+        report = state.read_json(target / job["bug_result_path"], {})
+        attempts = report.get("attempts") if isinstance(report, dict) else None
+        index = int(job.get("negative_attempt_index", 1))
+        if not isinstance(attempts, list) or len(attempts) < index: return "Bug Validator result must append the current probe to attempts"
+        if result is not None:
+            latest = attempts[-1]
+            if not isinstance(latest, dict) or latest.get("classification") != result.get("classification"):
+                return "Bug Validator result attempt classification does not match its receipt"
     return None
 def _fail(job, kind, message):
     if kind not in FAILURE_CLASSES: raise ValueError("unsupported failure class")
-    job.update({"failure_class": kind, "message": message or "worker failed", "failed_at": state.now(), "status": "retryable" if kind in RETRYABLE_FAILURES and job["attempts"] < job["max_attempts"] else "failed"})
+    if job["type"] == "bug_validate" and not job.get("legacy_contract") and kind in RETRYABLE_FAILURES:
+        runtime_attempts = int(job.get("runtime_attempts", 0)) + 1
+        job["runtime_attempts"] = runtime_attempts
+        retryable = runtime_attempts < job["max_attempts"]
+    else: retryable = kind in RETRYABLE_FAILURES and job["attempts"] < job["max_attempts"]
+    job.update({"failure_class": kind, "message": message or "worker failed", "failed_at": state.now(), "status": "retryable" if retryable else "failed"})
 def create(target, payload):
     if not isinstance(payload, dict): raise ValueError("job JSON must be an object")
     job_id, kind = payload.get("id"), payload.get("type"); _safe_id(job_id)
@@ -137,8 +161,11 @@ def create(target, payload):
     if worker_report in outputs and outputs.count(worker_report) != 1: raise ValueError("worker report may appear only once")
     if any(item.startswith("fm_agent_skill/worker_reports/") and item != worker_report for item in outputs): raise ValueError("worker report path must match its job id")
     if kind == "incremental_spec_plan" and not legacy_contract and outputs != [worker_report]: raise ValueError("incremental spec planning must write only its assigned worker report")
+    bug_results = [item for item in outputs if item.startswith("fm_agent/bug_validation/") and item.endswith(".result.json")]
+    if kind == "bug_validate" and not legacy_contract and len(bug_results) != 1: raise ValueError("Bug Validator must assign exactly one fm_agent/bug_validation/*.result.json output")
     job = {"schema_version": 2, "id": job_id, "phase": phase, "type": kind, "status": "queued", "depends_on": deps, "required_outputs": outputs, "artifacts": [_artifact(item) for item in artifacts], "attempts": 0, "max_attempts": _limit(target, payload), "created_at": state.now(), "updated_at": state.now()}
     if legacy_contract: job["legacy_contract"] = True
+    elif kind == "bug_validate": job.update({"bug_result_path": bug_results[0], "negative_max_attempts": _negative_attempts(target, payload), "negative_attempts": 0, "runtime_attempts": 0})
     if isinstance(payload.get("input"), dict): job["input"] = payload["input"]
     _save(target, job); return job
 def ready(target):
@@ -184,10 +211,18 @@ def transition(target, job_id, action, result, message, failure_class):
         error = _admission_error(target, job)
         if error: raise ValueError(error)
         job["status"] = "running"; job["attempts"] += 1; job["started_at"] = state.now()
+        if job["type"] == "bug_validate" and not job.get("legacy_contract"):
+            job["negative_attempt_index"] = int(job.get("negative_attempts", 0)) + 1
     elif action == "complete":
         if job["status"] != "running": raise ValueError("only a running job can complete")
-        error = _validate_report(job, result) or _validate(target, job)
+        error = _validate_report(job, result) or _validate(target, job, result)
         if error: _fail(job, "output", error)
+        elif job["type"] == "bug_validate" and not job.get("legacy_contract") and result["classification"] in BUG_NEGATIVE_CLASSIFICATIONS:
+            negative_attempts = int(job.get("negative_attempts", 0)) + 1
+            job["negative_attempts"] = negative_attempts; job["result"] = result
+            if negative_attempts < int(job["negative_max_attempts"]):
+                job.update({"status": "retryable", "retry_reason": "negative_result", "message": "Bug Validator did not confirm the candidate; repeat probe required"})
+            else: job.update({"status": "succeeded", "completed_at": state.now(), "negative_validation_exhausted": True})
         else:
             job["status"] = "succeeded"; job["completed_at"] = state.now()
             if result is not None: job["result"] = result
@@ -204,6 +239,8 @@ def recover(target):
         job = state.read_json(path, {})
         if not isinstance(job, dict) or job.get("status") != "running": continue
         job.setdefault("max_attempts", _limit(target, job)); error = _validate(target, job)
+        if job["type"] == "bug_validate" and not job.get("legacy_contract") and error is None:
+            error = "interrupted Bug Validator has no completed classification receipt"
         if error:
             _fail(job, "interrupted", error)
             if job["status"] == "retryable": retryable.append(job["id"])
