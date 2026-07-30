@@ -37,7 +37,8 @@ def main():
         if not args.extra_edge: args.extra_edge = effective_config.get("extra_edge")
         if not args.knowledge: args.knowledge = effective_config.get("knowledge", [])
         fingerprint, inputs = scope(args, effective_config)
-        record = {"schema_version": 1, "mode": args.mode, "status": "running", "started_at": state.now(), "current_phase": state.PHASES[args.mode][0], "phases": state.PHASES[args.mode], "phase_status": {}, "phase_history": {}, "fingerprint": fingerprint, "inputs": inputs, "start_commit": state.git(target, "rev-parse", "HEAD"), "source_snapshot": state.source_snapshot(target, inputs.get("submodules", [])), "resume": {"count": 0}}
+        snapshot_commit = state.git(target, "rev-parse", "HEAD")
+        record = {"schema_version": 2, "mode": args.mode, "status": "running", "started_at": state.now(), "current_phase": state.PHASES[args.mode][0], "phases": state.PHASES[args.mode], "phase_status": {}, "phase_history": {}, "fingerprint": fingerprint, "inputs": inputs, "snapshot_commit": snapshot_commit, "resume": {"count": 0}}
     else:
         record = load_active(target); phase = args.phase or record.get("current_phase")
         if args.action == "resume":
@@ -73,8 +74,9 @@ def main():
             if missing: raise SystemExit("cannot complete: phase gates not passed: " + ", ".join(missing))
             record.update({"status": "succeeded", "ended_at": state.now()})
             commit = state.git(target, "rev-parse", "HEAD")
-            file_hashes = state.source_snapshot(target, record["inputs"].get("submodules", []))
-            state.atomic_json(state.skill_dir(target) / "baseline.json", {"schema_version": 3, "analysis_commit": commit, "observed_commit": commit, "observed_at": record["ended_at"], "source_snapshot": file_hashes, "file_hashes": file_hashes, "fingerprint": record["fingerprint"], "inputs": record["inputs"], "completed_at": record["ended_at"]})
+            if record.get("snapshot_commit") != commit: raise SystemExit("analysis worktree moved away from its saved snapshot commit")
+            state.atomic_json(state.skill_dir(target) / "baseline.json", {"schema_version": 4, "baseline_commit": commit, "fingerprint": record["fingerprint"], "inputs": record["inputs"], "completed_at": record["ended_at"]})
+            state.version_log(target, commit)
         elif args.action == "fail": record.update({"status": "failed", "ended_at": state.now(), "failure": args.message})
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})
     record["updated_at"] = state.now(); save(target, record)

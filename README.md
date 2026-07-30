@@ -9,9 +9,11 @@ dispatches the original FM-Agent semantic-worker boundaries as controlled host
 subagents. It is a direct implementation: it never launches or imports the
 original FM-Agent pipeline.
 
-The Skill runs in a Git working tree and does not modify business source code.
-The current release supports full analysis, automatic incremental analysis,
-no-op provenance refreshes, and explicit safe resume of interrupted analyses.
+The Skill runs every analysis in a detached Git worktree and does not modify
+business source code. It captures uncommitted non-ignored changes as a private
+local snapshot commit without moving the user's branch, index, or `HEAD`.
+The current release supports full analysis, Git-based incremental analysis,
+no-op detection, and explicit safe resume of interrupted analyses.
 
 ## Features
 
@@ -22,10 +24,10 @@ no-op provenance refreshes, and explicit safe resume of interrupted analyses.
 - Build isolated reproductions for eligible direct violations and report
   confirmed defects.
 - Run a full analysis when no usable baseline exists.
-- Run an incremental analysis automatically when a valid baseline exists and
-  business source content changes.
-- Skip repeated analysis when business source content is unchanged, even when
-  the Git commit changes.
+- Run an incremental analysis automatically when the current Git snapshot
+  differs from a valid baseline commit.
+- Let users continue editing and committing the original worktree while the
+  Skill analyzes its stable snapshot worktree.
 - Continue the single interrupted full or incremental analysis from its first
   incomplete phase without repeating completed work.
 - Use CodeGraph automatically for an exact call graph when it is available, or
@@ -78,7 +80,6 @@ or natural-language request passes them in:
   [--knowledge FILE ...]
   [--extra-edge FILE_OR_DIR]
   [--one-phase]
-  [--isolate]
   [--resume]
 ```
 
@@ -88,11 +89,10 @@ or natural-language request passes them in:
 | `--knowledge` | Add Markdown domain knowledge. |
 | `--extra-edge` | Add static call-graph edges. |
 | `--one-phase` | Generate specifications in one phase. |
-| `--isolate` | Request analysis in an isolated Git worktree. |
 | `--resume` | Explicitly continue the eligible interrupted full or incremental analysis. It cannot be combined with a new note or configuration options. |
 
 There is normally no need to select full or incremental mode manually. The
-Skill selects it from its baseline and source snapshot.
+Skill selects it from its Git baseline commit and the current snapshot commit.
 
 ## Host worker scheduler
 
@@ -129,11 +129,12 @@ made retryable in place when attempts remain.
 
 The Skill keeps no run history. A full analysis clears old generated FM-Agent
 artifacts, trace payloads, current jobs, and probe builds. An incremental
-analysis retains compatible sidecars and hash-compatible unchanged verification
+analysis retains compatible sidecars and unchanged-file verification
 results, removes changed/removed results, and clears prior bug, trace, job, and
 probe outputs. A successful terminal analysis removes current jobs and
-probes; `active.json` is overwritten by the next analysis and `baseline.json`
-is the only long-lived state.
+probes; `active.json` is overwritten by the next analysis. The long-lived
+source baseline is `refs/fm-agent-skill/baseline`; `baseline.json` retains only
+run configuration and completion provenance.
 
 To continue a stopped analysis, make an explicit request instead of selecting a
 mode manually:
@@ -142,11 +143,10 @@ mode manually:
 Continue the interrupted FM-Agent analysis.
 ```
 
-Resume requires unchanged supported-source content and unchanged saved analysis
+Resume requires the retained Git snapshot worktree and unchanged saved analysis
 inputs. It validates completed stages and starts at the first incomplete one.
-It also reconciles per-worker job state before
-dispatching new work. A source-changing commit requires a normal new analysis;
-a commit with identical source content can still resume.
+It also reconciles per-worker job state before dispatching new work. Changes in
+the original worktree do not alter the retained snapshot.
 
 FM-Agent displays a `Stage current/total` update before each analysis stage. A
 resumed analysis announces its recovery stage; a no-op explicitly
@@ -162,19 +162,13 @@ current `fm_agent_skill/active.json` record.
 | State | Mode | CodeGraph behavior |
 | --- | --- | --- |
 | No usable baseline, or incomplete baseline artifacts | full | Rebuilds the index automatically when CodeGraph is available. |
-| Valid baseline and changed business source content | incremental | Rebuilds the index automatically when CodeGraph is available. |
-| Valid baseline and unchanged business source content | no-op | Does not inspect or rebuild CodeGraph. |
-| Only the Git commit changed | no-op | Refreshes `observed_commit` only and retains the analysis baseline. |
+| Valid baseline and a different snapshot commit | incremental | Rebuilds the index automatically when CodeGraph is available. |
+| Valid baseline and the same snapshot commit | no-op | Does not inspect or rebuild CodeGraph. |
 
-The baseline separates two kinds of provenance:
-
-- `analysis_commit`: the commit associated with the current full or
-  incremental analysis result.
-- `observed_commit`: the most recent commit whose source snapshot was confirmed
-  to match the baseline.
-
-As a result, analyzing uncommitted source and then committing exactly the same
-content does not cause a duplicate analysis.
+The baseline is the commit held by `refs/fm-agent-skill/baseline`; the latest
+line in `fm_agent/version.log` mirrors it. A dirty worktree is captured in a
+private local snapshot commit, so committed and uncommitted source states both
+have one exact Git identity.
 
 ## CodeGraph and precision
 
@@ -231,13 +225,13 @@ Skill control index list only function source copies, never sidecars.
 
 `fm_agent_skill/` is deliberately separate from those analysis artifacts. It
 is the sole location for mutable orchestration data such as `config.json`, the
-current analysis, locks, baselines, function hashes, incremental decisions, and
+current analysis, locks, Git baseline metadata, incremental decisions, and
 isolated probe builds. It is not an FM-Agent analysis result.
 
 For an incremental run, the latest module/file-selection records and
 specification-update records remain in `fm_agent/`; only verification results
 for changed or removed functions and prior Bug Validator results are cleared.
-This preserves a complete, hash-checked baseline without presenting old bug
+This preserves a complete Git-commit baseline without presenting old bug
 reports as new findings.
 
 Useful files include:
@@ -246,7 +240,7 @@ Useful files include:
 fm_agent/bug_validation/summary.json
 fm_agent/bug_validation/<function>.md
 fm_agent_skill/active.json
-fm_agent_skill/baseline.json
+fm_agent/version.log
 fm_agent_skill/control/call_graph_precision.json
 ```
 
@@ -264,25 +258,22 @@ analysis state and reports, not business source.
   source or the current phase definition.
 - An incremental run preserves unaffected specifications and revalidates direct
   violations instead of reusing bug-validation conclusions from an old run.
-- Resume is explicit and validates the original source snapshot and analysis
+- Resume is explicit and validates the retained Git snapshot and analysis
   configuration. A fresh lock heartbeat is treated as a potentially active
   analysis; lock takeover requires an explicit user confirmation.
-- `--isolate` runs the analysis in one temporary Git worktree and copies only
-  `fm_agent/` and `fm_agent_skill/` back on successful completion. A failed or
-  stopped isolated analysis keeps that one snapshot until resume, then removes it.
+- Every non-noop analysis runs in one temporary detached Git worktree. It
+  copies only `fm_agent/` and `fm_agent_skill/` back on successful completion;
+  a failed or stopped analysis keeps that snapshot until resume.
 
 ## Verified workflow
 
 The following two-step workflow was verified with `cpp-demo`:
 
-1. Run a full analysis while a source file is still uncommitted. It produced an
-   exact CodeGraph call graph, a baseline snapshot, and two confirmed defects.
-2. Commit the identical source content and run again. The result was no-op:
-   CodeGraph was not rebuilt, `analysis_commit` was retained,
-   `observed_commit` advanced to the new commit, and no active lock remained.
-
-This verifies that re-analysis is determined by source content rather than Git
-commit identity alone.
+1. Run a full analysis while a source file is still uncommitted. The Skill
+   creates a private snapshot commit and analyzes it in a detached worktree.
+2. Continue editing or commit in the original worktree while analysis proceeds;
+   the active snapshot remains stable. The next run compares the new snapshot
+   against the successful baseline commit.
 
 The scheduler test covers retryable Agent failures, exhausted attempts,
 interrupted-job recovery, invalid outputs, and the single-attempt Bug Validator
@@ -334,7 +325,7 @@ claude plugin install fm-agent-skill@fm-agent-skill
 ```
 
 支持命令入口或自然语言请求附带修改说明、`--submodule`、`--knowledge`、`--extra-edge`、
-`--one-phase`、`--isolate` 或 `--resume`。
+`--one-phase` 或 `--resume`。
 
 如需续跑被中断的 full 或 incremental，请明确请求：
 
@@ -342,7 +333,7 @@ claude plugin install fm-agent-skill@fm-agent-skill
 继续执行刚才中断的 FM-Agent 分析。
 ```
 
-resume 会从当前分析的第一个未完成阶段继续；只有源码内容和原分析配置均未变化时才会执行。源码改变后应重新运行；仅提交了相同源码内容时仍可续跑。
+resume 会从当前分析的第一个未完成阶段继续；它始终使用保留的 Git snapshot worktree，不受原工作区后续源码修改影响。
 
 full、incremental 和 resume 都会在每个阶段前显示“当前阶段/总阶段数”；resume 会先显示恢复位置，no-op 会明确说明没有执行分析阶段。
 
@@ -366,25 +357,24 @@ domain context 每次失败后等待 10 秒；spec 阶段若已得到部分有�
 
 Skill 不保留 run 历史。full 会清理旧的派生产物、trace payload、当前 jobs 与 probe；
 incremental 会保留兼容 sidecar，但清理旧 verification、bug、trace、jobs 与 probe。
-成功结束后会删除当前 jobs 与 probe；下一次分析覆盖 `active.json`，只有
-`baseline.json` 长期保留。
+成功结束后会删除当前 jobs 与 probe；下一次分析覆盖 `active.json`。源码基线由
+`refs/fm-agent-skill/baseline` 与 `fm_agent/version.log` 保存。
 
 ## 运行方式与产物
 
-- 无可用基线时执行 full；业务源码变化时自动执行 incremental。
-- 源码内容未变时执行 no-op；即使只新增 Git 提交，也只更新 `observed_commit`，不会重建
-  CodeGraph。
+- 无可用基线时执行 full；当前 Git snapshot 与基线不同则执行 incremental。
+- 当前 Git snapshot 与基线相同时执行 no-op，不会重建 CodeGraph。
 - CodeGraph 仅在 full 或 incremental 时自动重建；不可用时记录 `agent-static` 回退。
 - resume 不会重建已经完成且有效的调用图；若调用图阶段本身中断，则复用可读的同快照索引或按原后端重建。
 - `fm_agent/` 保存函数副本、sidecar 规约、验证和缺陷报告；`fm_agent_skill/` 保存基线、运行记录和控制状态；
   `.codegraph/` 保存生成索引。建议将三者加入目标项目的 `.gitignore`。
 
-`analysis_commit` 表示当前分析结果对应的提交，`observed_commit` 表示最近一次确认源码快照
-一致的提交。因此，先分析未提交内容、再提交相同内容不会重复分析。
+基线是 `refs/fm-agent-skill/baseline` 指向的 commit。未提交源码会先被写入私有 snapshot
+commit，不移动用户分支、暂存区或 `HEAD`。
 
 ## 已验证场景
 
-在 `cpp-demo` 中已验证：首次对未提交源码执行 full 后，再提交完全相同的源码并运行，第二次会
-正确返回 no-op，保留分析基线与缺陷结论，并更新 `observed_commit`。
+在 `cpp-demo` 中验证：对未提交源码启动分析后，Skill 在 detached snapshot worktree 中运行；
+用户可以同时修改原工作区，下一次运行会以新的 snapshot 与成功基线进行 Git diff。
 
 调度测试覆盖：超时重试、次数耗尽、中断恢复、无效产物自动重试，以及 Bug Validator 的单次限制。

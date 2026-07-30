@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preflight, mode selection, and single-current-analysis preparation."""
+"""Preflight, Git-snapshot mode selection, and active-analysis preparation."""
 from __future__ import annotations
 
 import argparse
@@ -9,9 +9,9 @@ import sys
 from pathlib import Path
 
 from _common import project, state
-from config import load
+from config import DEFAULTS, load
+from isolation import create as create_snapshot, discard as discard_snapshot, marker as snapshot_marker
 from locking import acquire, reclaim_for_resume, release
-from isolation import create as create_isolation, marker as isolation_marker, sync as sync_isolation
 
 
 def valid_settings(target, config):
@@ -29,13 +29,13 @@ def valid_settings(target, config):
 
 
 def build_config(args, target, base=None):
-    config = dict(base if isinstance(base, dict) else load(target))
+    candidate = dict(base if isinstance(base, dict) else load(target))
+    config = {key: candidate.get(key, value) for key, value in DEFAULTS.items()}
     if args.submodules: config["submodules"] = args.submodules
     if args.knowledge: config["knowledge"] = args.knowledge
     if args.extra_edge is not None: config["extra_edge"] = args.extra_edge
     if args.codegraph: config["call_graph_backend"] = "codegraph"
     if args.one_phase: config["one_phase"] = True
-    if args.isolate: config["isolate"] = True
     return config
 
 
@@ -54,13 +54,13 @@ def inspect(target, args):
     if issues: return {"ok": False, "issues": issues}
     fingerprint, _ = state.fingerprint(target, config["one_phase"], config["submodules"], config.get("extra_edge"), config["knowledge"], config)
     baseline = state.inspect_baseline(target, fingerprint, config["submodules"])
-    if baseline["valid"] and not baseline["snapshot_changed"]:
-        current = state.git(target, "rev-parse", "HEAD")
-        return {"ok": True, "mode": "noop", "baseline": baseline, "config": config, "requires_codegraph": False, "refresh_observed_commit": baseline["saved"].get("observed_commit") != current}
-    return {"ok": True, "mode": "incremental" if baseline["valid"] else "full", "baseline": baseline, "config": config, "requires_codegraph": True}
+    current = state.git(target, "rev-parse", "HEAD")
+    mode = "noop" if baseline["valid"] and baseline["commit"] == current else "incremental" if baseline["valid"] else "full"
+    return {"ok": True, "mode": mode, "baseline": baseline, "config": config, "requires_codegraph": mode != "noop"}
 
 
-def resume_overrides(args): return bool(args.note.strip() or args.submodules or args.knowledge or args.extra_edge is not None or args.one_phase or args.isolate or args.codegraph)
+def resume_overrides(args):
+    return bool(args.note.strip() or args.submodules or args.knowledge or args.extra_edge is not None or args.one_phase or args.codegraph)
 
 
 def call_pipeline(target, action, mode=None, config=None):
@@ -70,7 +70,6 @@ def call_pipeline(target, action, mode=None, config=None):
         command += ["--config-json", json.dumps(config)]
         for item in config["submodules"]: command += ["--submodule", item]
         if config["one_phase"]: command.append("--one-phase")
-        if config["isolate"]: command.append("--isolate")
         if config.get("extra_edge"): command += ["--extra-edge", config["extra_edge"]]
         for item in config["knowledge"]: command += ["--knowledge", item]
     completed = subprocess.run(command, text=True, capture_output=True)
@@ -79,20 +78,18 @@ def call_pipeline(target, action, mode=None, config=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Preflight and prepare FM-Agent's single current analysis.")
-    parser.add_argument("action", choices=("inspect", "dispatch", "resume-inspect", "resume")); parser.add_argument("--project", required=True); parser.add_argument("--note", default=""); parser.add_argument("--submodule", dest="submodules", action="append", default=[]); parser.add_argument("--one-phase", action="store_true"); parser.add_argument("--extra-edge"); parser.add_argument("--knowledge", action="append", default=[]); parser.add_argument("--isolate", action="store_true"); parser.add_argument("--codegraph", action="store_true"); parser.add_argument("--force-stale-lock", action="store_true"); parser.add_argument("--take-over", action="store_true")
-    args = parser.parse_args(); target = project(args); source_target = target; preflight = state.preflight(target)
+    parser = argparse.ArgumentParser(description="Prepare one FM-Agent analysis in a private Git snapshot worktree.")
+    parser.add_argument("action", choices=("inspect", "dispatch", "resume-inspect", "resume")); parser.add_argument("--project", required=True); parser.add_argument("--note", default=""); parser.add_argument("--submodule", dest="submodules", action="append", default=[]); parser.add_argument("--one-phase", action="store_true"); parser.add_argument("--extra-edge"); parser.add_argument("--knowledge", action="append", default=[]); parser.add_argument("--codegraph", action="store_true"); parser.add_argument("--force-stale-lock", action="store_true"); parser.add_argument("--take-over", action="store_true")
+    args = parser.parse_args(); source_target = project(args)
     if args.action == "inspect":
-        result = inspect(target, args); print(json.dumps(result, ensure_ascii=False, indent=2)); raise SystemExit(0 if result["ok"] else 2)
-    pending_isolation = isolation_marker(source_target)
-    if args.action in {"resume-inspect", "resume"} and isinstance(pending_isolation.get("snapshot"), str) and Path(pending_isolation["snapshot"]).is_dir():
-        target = Path(pending_isolation["snapshot"]).resolve()
-    if args.action == "dispatch" and isinstance(pending_isolation.get("snapshot"), str) and Path(pending_isolation["snapshot"]).is_dir():
-        print(json.dumps({"ok": False, "reason": "an isolated FM-Agent analysis is pending; use --resume or finish it first"}, ensure_ascii=False, indent=2)); raise SystemExit(2)
+        result = inspect(source_target, args); print(json.dumps(result, ensure_ascii=False, indent=2)); raise SystemExit(0 if result["ok"] else 2)
+    pending = snapshot_marker(source_target)
+    target = Path(pending["snapshot"]).resolve() if args.action in {"resume-inspect", "resume"} and isinstance(pending.get("snapshot"), str) and Path(pending["snapshot"]).is_dir() else source_target
+    if args.action == "dispatch" and isinstance(pending.get("snapshot"), str) and Path(pending["snapshot"]).is_dir():
+        print(json.dumps({"ok": False, "reason": "an FM-Agent snapshot worktree is pending; use --resume or clean it first"}, ensure_ascii=False, indent=2)); raise SystemExit(2)
     if args.action == "resume-inspect":
-        result = {"ok": False, "preflight": preflight} if not preflight["ok"] else ( {"ok": False, "reason": "resume cannot override current analysis settings"} if resume_overrides(args) else state.inspect_resume(target) )
+        result = {"ok": False, "preflight": state.preflight(source_target)} if not state.preflight(source_target)["ok"] else ({"ok": False, "reason": "resume cannot override current analysis settings"} if resume_overrides(args) else state.inspect_resume(target))
         print(json.dumps(result, ensure_ascii=False, indent=2)); raise SystemExit(0 if result["ok"] else 2)
-    if not preflight["ok"]: print(json.dumps({"ok": False, "preflight": preflight}, ensure_ascii=False, indent=2)); raise SystemExit(2)
     if args.action == "resume":
         checked = {"ok": False, "reason": "resume cannot override current analysis settings"} if resume_overrides(args) else state.inspect_resume(target)
         if not checked["ok"]: print(json.dumps(checked, ensure_ascii=False, indent=2)); raise SystemExit(2)
@@ -102,30 +99,26 @@ def main():
             except RuntimeError: pass
             print(json.dumps({"ok": False, "reason": str(exc)}, ensure_ascii=False, indent=2)); raise SystemExit(2)
         print(json.dumps({"ok": True, "mode": "resume", "project": str(target), "resume_from_phase": record["current_phase"], "config": checked["config"], "lock": lock, "analysis": record}, ensure_ascii=False, indent=2)); return
-    selected = inspect(target, args)
-    if not selected["ok"]: print(json.dumps(selected, ensure_ascii=False, indent=2)); raise SystemExit(2)
-    isolated = None
-    if selected["mode"] != "noop" and selected["config"].get("isolate"):
-        try:
-            isolated = create_isolation(source_target); target = Path(isolated["snapshot"]).resolve()
-        except RuntimeError as exc:
-            print(json.dumps({"ok": False, "reason": str(exc)}, ensure_ascii=False, indent=2)); raise SystemExit(2)
-    try: lock = acquire(target, args.force_stale_lock)
-    except RuntimeError as exc: print(json.dumps({"ok": False, "reason": str(exc)}, ensure_ascii=False, indent=2)); raise SystemExit(2)
+    preview = inspect(source_target, args)
+    if not preview["ok"]: print(json.dumps(preview, ensure_ascii=False, indent=2)); raise SystemExit(2)
+    if preview["mode"] == "noop":
+        record = {"schema_version": 2, "mode": "noop", "status": "noop", "started_at": state.now(), "ended_at": state.now(), "fingerprint": preview["baseline"]["saved"]["fingerprint"], "inputs": preview["baseline"]["saved"]["inputs"], "baseline_commit": preview["baseline"]["commit"]}
+        state.atomic_json(state.skill_dir(source_target) / "active.json", record)
+        print(json.dumps({"ok": True, "mode": "noop", "project": str(source_target), "baseline": preview["baseline"], "config": preview["config"], "analysis": record}, ensure_ascii=False, indent=2)); return
     try:
-        if selected["mode"] == "noop":
-            state.refresh_observed_commit(target, selected["baseline"]["saved"])
-            record = {"schema_version": 1, "mode": "noop", "status": "noop", "started_at": state.now(), "ended_at": state.now(), "fingerprint": selected["baseline"]["saved"]["fingerprint"], "inputs": selected["baseline"]["saved"]["inputs"], "baseline_commit": selected["baseline"]["commit"]}
-            state.atomic_json(state.skill_dir(target) / "active.json", record); release(target, "idle")
-        else:
-            record = call_pipeline(target, "prepare", selected["mode"], selected["config"])
-            if selected["mode"] == "incremental":
-                record["intent_path"] = str(state.build_intent(target, selected["baseline"]["commit"], args.note)); state.atomic_json(state.skill_dir(target) / "active.json", record)
-        print(json.dumps({"ok": True, "mode": selected["mode"], "project": str(target), "isolated": isolated, "baseline": selected["baseline"], "config": selected["config"], "lock": lock, "analysis": record}, ensure_ascii=False, indent=2))
-    except Exception:
-        release(target, "failed")
-        if isolated: sync_isolation(target)
-        raise
+        snapshot = create_snapshot(source_target); target = Path(snapshot["snapshot"]).resolve()
+        selected = inspect(target, args)
+        if not selected["ok"]: raise RuntimeError(str(selected))
+        lock = acquire(target, args.force_stale_lock)
+        record = call_pipeline(target, "prepare", selected["mode"], selected["config"])
+        if selected["mode"] == "incremental":
+            record["intent_path"] = str(state.build_intent(target, selected["baseline"]["commit"], args.note)); state.atomic_json(state.skill_dir(target) / "active.json", record)
+        print(json.dumps({"ok": True, "mode": selected["mode"], "project": str(target), "source_project": str(source_target), "snapshot": snapshot, "baseline": selected["baseline"], "config": selected["config"], "lock": lock, "analysis": record}, ensure_ascii=False, indent=2))
+    except Exception as exc:
+        if 'target' in locals() and target != source_target:
+            try: discard_snapshot(target)
+            except RuntimeError: pass
+        print(json.dumps({"ok": False, "reason": str(exc)}, ensure_ascii=False, indent=2)); raise SystemExit(2)
 
 
 if __name__ == "__main__": main()

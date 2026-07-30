@@ -1,10 +1,11 @@
 # Run contract
 
 `orchestrate.py inspect` performs the read-only mode decision before any
-CodeGraph action. `baseline.py` determines the mode. A valid baseline requires parsed phases,
-reachable successful commit, complete `.spec.json` and `.info.json` extracted artifacts,
-full verification output, and a matching scope fingerprint. Failure of any
-condition selects full analysis.
+CodeGraph action. A valid baseline requires parsed phases, a reachable commit
+at `refs/fm-agent-skill/baseline`, complete `.spec.json` and `.info.json`
+extracted artifacts, full verification output, and a matching scope fingerprint.
+Failure of any condition selects full analysis. Stateful dispatch then creates a
+private Git snapshot commit and runs the selected mode in its detached worktree.
 
 | State | Agent action |
 | --- | --- |

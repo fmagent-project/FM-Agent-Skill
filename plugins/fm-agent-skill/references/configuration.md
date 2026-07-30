@@ -20,9 +20,11 @@ original batch-prompt granularity. `bug_validation_max_attempts` defaults to
 `1`, matching FM-Agent's Bug Validator retry limit. These values are analysis
 configuration and therefore participate in the fingerprint.
 
-`isolate=true` creates one throwaway Git worktree for the current analysis. The
-Coordinator must use the returned snapshot path until terminal completion. On
-`pipeline.py complete`, the Skill copies its generated `fm_agent/` and
-`fm_agent_skill/` back to the source project and removes the worktree. A failed
-or interrupted isolated analysis retains that one snapshot for `--resume`; it
-does not accumulate per-run history.
+Every analysis creates one detached Git worktree from a private snapshot
+commit. The snapshot captures tracked and non-ignored working-tree changes
+without moving the user's branch, index, or `HEAD`. The Coordinator must use
+the returned snapshot path until terminal completion. On `pipeline.py complete`,
+the Skill promotes that commit to `refs/fm-agent-skill/baseline`, copies its
+generated `fm_agent/` and `fm_agent_skill/` back to the source project, and
+removes the worktree. A failed or interrupted analysis retains one snapshot for
+`--resume`; it does not accumulate per-run history.

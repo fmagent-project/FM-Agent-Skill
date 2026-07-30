@@ -5,10 +5,10 @@ automatically written intent. Every selection must be recorded in
 `fm_agent_skill/control/incremental_decision.json` with a reason: `diff`, `intent`,
 `caller-propagation`, `callee-propagation`, or `spec-change`.
 
-1. `validate_baseline`: confirm baseline index, hashes, specs, and verification artifacts.
+1. `validate_baseline`: confirm the baseline Git ref, index, specs, and verification artifacts.
 2. `refresh_plan`: dispatch `fm-phase-plan-worker` (and `fm-domain-context-worker` when context changes) for the chosen scope, then run `executor.py normalize-phases --project "$PROJECT"` before its gate.
 3. `preserve_specs`: run `executor.py preserve-specs --project "$PROJECT"` before re-extraction to snapshot compatible paired sidecars in Skill control state.
-4. `diff`: run `executor.py extract --project "$PROJECT"`, then `executor.py diff --project "$PROJECT"`. It compares per-function hashes and per-source-file hashes: any changed file includes every current function from that file, even when a function body is unchanged. It removes verification results for that whole conservative range and for removed functions; only hash-compatible unaffected results remain available for the next baseline.
+4. `diff`: run `executor.py extract --project "$PROJECT"`, then `executor.py diff --project "$PROJECT"`. It compares the baseline commit with the current snapshot commit through Git: any changed file includes every current function from that file, even when a function body is unchanged. It removes verification results for that whole conservative range and for removed functions; only unaffected files retain their sidecars and results.
 5. `rebuild_graph`: when CodeGraph is selected, run `codegraph.py export --output "$PROJECT/fm_agent_skill/control/codegraph_export.json"`, then run `executor.py graph --project "$PROJECT" --codegraph-export "$PROJECT/fm_agent_skill/control/codegraph_export.json"`. Otherwise dispatch `fm-agent-static-edge-worker`, promote its candidate with `executor.py record-agent-edges`, then run `executor.py graph`; its validated edges seed automatic caller/callee propagation.
 6. `select_scope`: run `executor.py select --project "$PROJECT"` for the deterministic changed-function seed. Then use `fm-select-relevant-modules-worker` and `fm-select-relevant-files-worker` to add caller/callee propagation. After validating each file-selector record, merge it with `incremental.py merge-selection --record <record> --reason caller-propagation` (or its actual propagation reason); the control decision records why every indexed function is included or excluded.
 7. `update_specs`: run `executor.py restore-specs --project "$PROJECT"` to recover only unchanged paired sidecars. Dispatch read-only `fm-incremental-spec-plan-worker` jobs for selected independent functions; persist each accepted response and call `incremental.py apply-plan --plan <plan>` serially. Then dispatch one `fm-reconcile-caller-info-worker` per caller frontier. The apply tool writes native `fm_agent/incremental_updated_specs.json`.
@@ -29,5 +29,5 @@ Read [resume-contract.md](resume-contract.md) for an explicit resume. Re-enter
 only the first incomplete incremental phase. Do not recalculate a completed
 diff, selection decision, or preserved-spec snapshot unless its normal gate no
 longer validates, in which case resume must fail rather than silently widening
-scope. Reuse only function artifacts whose ids and source hashes still match
-the interrupted run.
+scope. Reuse only function artifacts whose ids belong to the interrupted
+snapshot commit.

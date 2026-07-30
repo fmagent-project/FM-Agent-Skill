@@ -34,8 +34,9 @@ All mutable Skill state lives under `fm_agent_skill/`.
 - `fm_agent/bug_validation/` is generated only when a direct `MISMATCH` is
   probed. Confirmed candidates have a detail Markdown file, result JSON, and
   summary; a clean run need not create this directory.
-- `fm_agent/version.log`, written after a successful baseline, is source-version
-  provenance only. It is never a resume or baseline authority.
+- `fm_agent/version.log`, written after a successful baseline, records the
+  commit held by `refs/fm-agent-skill/baseline` for FM-Agent-compatible
+  provenance.
   `fm_agent/incremental_updated_specs.json` records the current incremental
   update.
 - `fm_agent/select_relevant_modules.md`, `relevant_modules.json`,
@@ -47,7 +48,8 @@ All mutable Skill state lives under `fm_agent_skill/`.
   prompt/response material below `trace/payloads/` only when full tracing is
   enabled.
 - `fm_agent_skill/control/analysis_index.json` is the Skill-owned function
-  identity/hash inventory. Precision, incremental snapshots/diff/selection,
+  identity inventory for one snapshot commit. Precision, incremental
+  diff/selection,
   `graph_edges.json`, and validated `agent_static_edges.json` are Skill-owned
   control artifacts. Active analysis state, locks, scheduler jobs, and probe-build results also belong in
   `fm_agent_skill/`, never in `fm_agent/`. Only the Coordinator and
@@ -75,26 +77,24 @@ layers}`. `source_files` must match its phase's declared source files. Each
 layer function has at least `function_id`, `artifact`, and `source_file`; a
 function occurs in one phase-layer artifact only.
 
-Verification result: `{function, function_id, source_hash, verdict, gaps?,
+Verification result: `{function, function_id, snapshot_commit, verdict, gaps?,
 error?}`. `MISMATCH` means a local implementation/spec violation;
 `DEPENDENCY_RISK` means a caller is affected by a callee mismatch but has no
 independently established local violation. `INCONCLUSIVE` records that the
 available contract is implementation-derived/low-confidence and cannot prove a
-match. Identity and hash must match the
-control analysis index.
+match. Identity and snapshot commit must match the current analysis worktree.
 
 Finding/bug result records function identity, spec claim, implementation
 evidence, trigger/probe, output, and status `candidate`, `confirmed`,
 `rejected`, or `error`. `summary.json` counts each status.
 
 `fm_agent_skill/active.json` is the sole current-analysis record. It contains
-mode, phase status, inputs, fingerprint, timestamps, source snapshot, and
-resume count; it is overwritten by the next analysis. `baseline.json` is the
-only successful analysis state retained long-term. Its `analysis_commit` is
-Git provenance; `source_snapshot` records actual scoped source content;
-`file_hashes` records the same per-file hashes for conservative module/global
-change detection; function hashes in `analysis_index.json` decide individual
-sidecar and verification reuse.
+mode, phase status, inputs, fingerprint, timestamps, an immutable
+`snapshot_commit`, and resume count; it is overwritten by the next analysis.
+The source baseline is the Git ref `refs/fm-agent-skill/baseline`, mirrored by
+the latest commit in `fm_agent/version.log`. `baseline.json` stores only the
+successful run's configuration and completion provenance; source and function
+hashes are not persisted.
 
 `fm_agent_skill/jobs/<job-id>.json` records a current host worker's type,
 dependencies, permitted/required outputs, attempt count, terminal status, and

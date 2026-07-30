@@ -81,9 +81,9 @@ def validate(target, mode, phase, submodules):
     }
     check = checks.get(phase)
     if check is None: return {"ok": False, "reason": f"unknown {mode} phase: {phase}"}
-    try: ok = bool(check())
+    try: ok = bool(check()) and state.snapshot_sources_clean(target)
     except OSError: ok = False
-    return {"ok": ok, "phase": phase, "reason": "" if ok else f"required artifacts for {phase} are missing or invalid"}
+    return {"ok": ok, "phase": phase, "reason": "" if ok else f"required artifacts for {phase} are missing, invalid, or the snapshot source changed"}
 
 
 def main():

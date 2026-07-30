@@ -10,16 +10,15 @@ incremental analysis.
 `running`, `failed`, or `interrupted`. It accepts the run only when all of the
 following hold:
 
-- Its immutable effective configuration and auxiliary-input hashes still match.
-- Its scoped supported-source snapshot still matches exactly. A Git commit may
-  differ when its source content is identical.
+- Its immutable effective configuration and auxiliary-input fingerprints still match.
+- Its retained worktree still has `HEAD` at the saved `snapshot_commit`.
 - It has a valid active analysis record, phase list, and a first incomplete phase.
-- It was created with resumable run state, including `source_snapshot`.
+- It was created with resumable Git-snapshot state.
 
 Do not pass a new note, scope, knowledge file, supplemental edge file,
-`one_phase`, `isolate`, or backend choice to a resume. A source or input change
-makes the old workspace unsafe; report the reason and require a normal new
-analysis rather than silently switching modes.
+`one_phase` or backend choice to a resume. Source changes in the original
+worktree do not change the retained snapshot; resume always analyzes the saved
+commit rather than silently switching to newer code.
 
 ## Lock ownership
 
@@ -44,12 +43,12 @@ it is itself the first incomplete phase.
 ## Artifact reuse
 
 Within a resumed incomplete phase, preserve an artifact only when its current
-function identity and source hash still match. Generate only missing, malformed,
-or hash-incompatible work:
+function identity and saved snapshot still match. Generate only missing or
+malformed work:
 
 - extraction: current function copies and analysis-index entries;
 - specification: paired schema-valid `.spec.json` and `.info.json` sidecars;
-- verification: schema-valid result records with matching function id and hash;
+- verification: schema-valid result records with matching function id and snapshot commit;
 - bug validation: current-run reports for unresolved direct `MISMATCH` items.
 
 For a resumed graph phase, keep the backend recorded in the run. A readable
@@ -57,4 +56,4 @@ same-snapshot CodeGraph index may be reused; a missing or unreadable selected
 index must be rebuilt. A completed valid graph phase is not rebuilt merely
 because the run resumes later.
 
-Only `pipeline.py complete` may create or advance `baseline.json`.
+Only `pipeline.py complete` may promote `refs/fm-agent-skill/baseline`.

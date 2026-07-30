@@ -42,7 +42,7 @@ it may pass the following arguments to the same workflow:
 ```text
 [natural-language change note]
   [--submodule path ...] [--one-phase]
-  [--extra-edge file-or-dir] [--knowledge file ...] [--isolate] [--resume]
+  [--extra-edge file-or-dir] [--knowledge file ...] [--resume]
 ```
 
 Treat all text not matching an option as the change note. Resolve paths relative
@@ -60,7 +60,6 @@ natural-language change note:
 - `--knowledge FILE` (repeatable)
 - `--extra-edge FILE_OR_DIR`
 - `--one-phase`
-- `--isolate`
 - `--resume`
 
 All remaining text is the change note. Preserve every option value and pass
@@ -71,7 +70,7 @@ acquires a lock, writes state, or rebuilds CodeGraph:
 <python3> "$FM_AGENT_SKILL_ROOT/scripts/orchestrate.py" inspect \
   --project "$PROJECT" \
   [--submodule "$PATH"]... [--knowledge "$FILE"]... \
-  [--extra-edge "$FILE_OR_DIR"] [--one-phase] [--isolate]
+  [--extra-edge "$FILE_OR_DIR"] [--one-phase]
 ```
 
 ### Explicit resume
@@ -79,7 +78,7 @@ acquires a lock, writes state, or rebuilds CodeGraph:
 `--resume` means continue the interrupted `full` or `incremental` analysis in
 `fm_agent_skill/active.json`; it never changes its saved scope or
 configuration. It is mutually exclusive with `--submodule`, `--knowledge`,
-`--extra-edge`, `--one-phase`, `--isolate`, and a new change note. Read
+`--extra-edge`, `--one-phase`, and a new change note. Read
 [resume-contract.md](../../references/resume-contract.md), then inspect it
 before any ordinary mode selection or CodeGraph action:
 
@@ -89,8 +88,8 @@ before any ordinary mode selection or CodeGraph action:
 ```
 
 If this returns an error, report its reason and do not start a fresh analysis.
-It rejects changed source content, changed auxiliary inputs, an already
-completed run, and legacy runs without a start snapshot. If the interrupted
+It rejects changed auxiliary inputs, an already completed run, a missing active
+worktree, and legacy runs without a Git snapshot. If the interrupted
 run's lock has a fresh heartbeat, report that another agent may still be
 working. Ask the user whether to take over; only after an explicit affirmative
 reply may the agent append `--take-over` below.
@@ -105,7 +104,7 @@ analysis's first incomplete phase and later phases. Do not call ordinary
 `inspect` or `dispatch`, do not call `pipeline.py prepare`, and do not run a
 full cleanup when a previous `phase_cleanup` succeeded. Revalidate every
 function-level artifact in a resumed specification, verification, or bug
-validation phase; retain only hash-compatible valid artifacts and produce only
+validation phase; retain only snapshot-compatible valid artifacts and produce only
 the missing or invalid ones. Refresh the lock heartbeat before and after each
 phase through the existing `pipeline.py` transitions.
 
@@ -122,12 +121,9 @@ with `agent-static`.
 
 When `--resume` is absent, use the ordinary workflow below.
 
-If inspection returns `noop` and `refresh_observed_commit` is false, report a
-user-visible no-op status and its baseline commit, then finish. Do not run
-`codegraph.py status`. If
-`refresh_observed_commit` is true, run the stateful
-`dispatch` command below **without** `--codegraph`; it writes the no-op record
-and refreshes only Git provenance, then finish.
+If inspection returns `noop`, report a user-visible no-op status and its
+baseline commit, then finish. Do not run `codegraph.py status` or dispatch a
+worktree.
 
 Only when inspection returns `full` or `incremental`, inspect CodeGraph:
 
@@ -149,7 +145,7 @@ After determining availability, run exactly one stateful dispatch command:
   --note "$CHANGE_NOTE" \
   [--submodule "$PATH"]... \
   [--knowledge "$FILE"]... \
-  [--extra-edge "$FILE_OR_DIR"] [--one-phase] [--isolate] [--codegraph]
+  [--extra-edge "$FILE_OR_DIR"] [--one-phase] [--codegraph]
 ```
 
 The bracketed terms are placeholders, not literal shell text: omit an option
@@ -167,13 +163,14 @@ run lock is held before extraction or graph construction:
 <python3> "$FM_AGENT_SKILL_ROOT/scripts/codegraph.py" init --rebuild --project "$PROJECT"
 ```
 
-When `--isolate` is selected, replace `$PROJECT` for every subsequent command
-with the `project` path returned by `dispatch`. It is a temporary Git worktree
-containing the exact source snapshot and current artifacts. `pipeline.py
-complete` copies `fm_agent/` and `fm_agent_skill/` back to the original project
-and removes the temporary worktree. `pipeline.py fail` deliberately retains the
-snapshot and marker for resume. Invoke `--resume` against the original project;
-the marker redirects it to the retained snapshot.
+For every non-noop dispatch, replace `$PROJECT` for every subsequent command
+with the `project` path returned by `dispatch`. It is a temporary detached Git
+worktree at a private snapshot commit; the user's original worktree may be
+edited or committed independently. `pipeline.py complete` promotes the
+snapshot to the Git baseline, copies `fm_agent/` and `fm_agent_skill/` back to
+the original project, and removes the temporary worktree. `pipeline.py fail`
+deliberately retains the snapshot for resume. Invoke `--resume` against the
+original project; its marker redirects it to the retained snapshot.
 
 During graph construction, export its normalized function and edge data into
 Skill control state, then supply that file to `executor.py graph`:

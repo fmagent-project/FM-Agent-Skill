@@ -27,8 +27,8 @@ def build(target, scope):
         if not isinstance(function_id, str):
             raise ValueError(f"extraction manifest lacks a stable function identity for {rel}")
         source_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        functions.append({"id": function_id, "path": details.get("source_path", rel), "artifact": rel, "line_start": details.get("line_start", 1), "line_end": details.get("line_end", max(1, len(source_lines))), "language": language_for(details.get("source_path", rel)), "source_hash": state.stripped_source_hash(path), "scope": scope})
-    data = {"schema_version": 1, "generated_at": state.now(), "functions": functions}
+        functions.append({"id": function_id, "path": details.get("source_path", rel), "artifact": rel, "line_start": details.get("line_start", 1), "line_end": details.get("line_end", max(1, len(source_lines))), "language": language_for(details.get("source_path", rel)), "scope": scope})
+    data = {"schema_version": 2, "generated_at": state.now(), "snapshot_commit": state.current_snapshot_commit(target), "functions": functions}
     state.atomic_json(state.control_dir(target) / "analysis_index.json", data)
     return data
 

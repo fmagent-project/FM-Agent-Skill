@@ -13,7 +13,6 @@ def common_scope(parser):
     parser.add_argument("--submodule", dest="submodules", action="append", default=[])
     parser.add_argument("--extra-edge")
     parser.add_argument("--knowledge", action="append", default=[])
-    parser.add_argument("--isolate", action="store_true", default=None)
 
 
 def project(args):

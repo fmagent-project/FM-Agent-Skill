@@ -22,8 +22,8 @@ silently bypass a missing artifact.
 
 For an explicit resume, read [resume-contract.md](resume-contract.md). Start
 at the active analysis's first incomplete phase, not at `preflight`. Keep all
-earlier gate-validated work. Within the resumed phase, retain only current
-hash-compatible function artifacts and create missing work. Do not repeat
+earlier gate-validated work. Within the resumed phase, retain only artifacts
+from the saved snapshot commit and create missing work. Do not repeat
 `phase_cleanup` after it has succeeded. Reuse a readable same-snapshot
 CodeGraph index only when resuming the incomplete `call_graph` phase.
 

@@ -1,6 +1,6 @@
 __pycache__/
 *.py[cod]
-fm_agent/
-fm_agent_plugin/
-.codegraph/
+/fm_agent/
+/fm_agent_skill/
+/.codegraph/
 tests/

@@ -7,7 +7,8 @@ disallowedTools: Agent
 
 Verify only the assigned extracted function against its paired sidecars and
 approved callee facts. Read the specification evidence and confidence before
-choosing a verdict. Write exactly the assigned JSON result under
+choosing a verdict. Include the supplied immutable `snapshot_commit` in the
+result. Write exactly the assigned JSON result under
 `fm_agent/logic_verification_results/`. Use `MISMATCH` only for a direct local
 violation supported by external contract evidence; use `DEPENDENCY_RISK` for a
 bad callee's propagated risk. Never emit `MATCH` for a low-confidence or

@@ -241,14 +241,19 @@ def graph(target: Path, codegraph_export: Path | None = None) -> dict:
 
 def preserve_specs(target: Path) -> dict:
     root = state.fm_dir(target) / "extracted_functions"; saved = {}
+    manifest = state.read_json(state.fm_dir(target) / "extraction_manifest.json", {}).get("functions", [])
+    source_for = {item.get("artifact"): item.get("source_path") for item in manifest if isinstance(item, dict)}
+    baseline = state.baseline_commit(target)
+    changed_files = state.changed_source_paths(target, baseline) if baseline else set()
     for artifact in root.rglob("*") if root.is_dir() else []:
         if not artifact.is_file() or state.is_metadata_sidecar(artifact): continue
         spec, info = Path(f"{artifact}.spec.json"), Path(f"{artifact}.info.json")
         if spec.is_file() and info.is_file():
             rel = artifact.relative_to(root).as_posix()
-            saved[rel] = {"source_hash": state.file_hash(artifact), "spec": state.read_json(spec, {}), "info": state.read_json(info, {})}
-    files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in _sources(target, [])}
-    data = {"schema_version": 1, "generated_at": state.now(), "files": files, "artifacts": saved}
+            source_path = source_for.get(rel)
+            if source_path not in changed_files:
+                saved[rel] = {"source_path": source_path, "spec": state.read_json(spec, {}), "info": state.read_json(info, {})}
+    data = {"schema_version": 2, "generated_at": state.now(), "baseline_commit": baseline, "artifacts": saved}
     state.atomic_json(state.control_dir(target) / "preserved_specs.json", data); return {"preserved": len(saved)}
 
 
@@ -259,7 +264,7 @@ def restore_specs(target: Path) -> dict:
     for rel, value in saved.items() if isinstance(saved, dict) else []:
         if not isinstance(value, dict): continue
         artifact = root / rel
-        if not artifact.is_file() or state.file_hash(artifact) != value.get("source_hash"): continue
+        if not artifact.is_file() or not isinstance(value.get("source_path"), str): continue
         spec, info = value.get("spec"), value.get("info")
         if not isinstance(spec, dict) or not isinstance(info, dict): continue
         state.atomic_json(Path(f"{artifact}.spec.json"), spec)
@@ -275,12 +280,11 @@ def diff(target: Path) -> dict:
     current = {item["artifact"]: item for item in state.source_index(target).get("functions", [])} if state.source_index(target) else {}
     manifest = state.read_json(state.fm_dir(target) / "extraction_manifest.json", {}).get("functions", [])
     source_for = {item.get("artifact"): item.get("source_path") for item in manifest if isinstance(item, dict)}
-    old_files = preserved.get("files", {}) if isinstance(preserved.get("files", {}), dict) else {}
-    current_files = {source.relative_to(target).as_posix(): state.file_hash(source) for source in _sources(target, [])}
-    changed_files = {path for path in set(old_files) | set(current_files) if old_files.get(path) != current_files.get(path)}
+    baseline = state.baseline_commit(target)
+    changed_files = state.changed_source_paths(target, baseline) if baseline else set()
     added = sorted(key for key in current if key not in old)
     removed = sorted(key for key in old if key not in current)
-    modified = sorted(key for key in current if key in old and current[key].get("source_hash") != old[key].get("source_hash"))
+    modified = sorted(key for key in current if key in old and source_for.get(key) in changed_files)
     file_changed = sorted(key for key in current if source_for.get(key) in changed_files)
     results = state.fm_dir(target) / "logic_verification_results"
     for artifact in set(file_changed) | set(modified) | set(removed):

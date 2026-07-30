@@ -68,6 +68,26 @@ def fm_dir(project: Path) -> Path:
     return project / "fm_agent"
 
 
+BASELINE_REF = "refs/fm-agent-skill/baseline"
+
+
+def baseline_commit(project: Path) -> str | None:
+    value = git(project, "rev-parse", "--verify", BASELINE_REF, check=False)
+    return value if value else None
+
+
+def current_snapshot_commit(project: Path) -> str:
+    """Return the worktree commit; unit-level tools may use an unversioned sentinel."""
+    return git(project, "rev-parse", "HEAD", check=False) or "unversioned"
+
+
+def version_log(project: Path, commit: str) -> None:
+    path = fm_dir(project) / "version.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(commit + "\n")
+
+
 def file_hash(path: Path) -> str | None:
     if not path.is_file():
         return None
@@ -129,31 +149,19 @@ def is_test_source_path(value: str) -> bool:
     return any(part in {"test", "tests", "testing", "fixtures"} for part in parts[:-1]) or name.startswith(("test_", "test-")) or "_test." in name or "_tests." in name
 
 
-def source_snapshot(project: Path, submodules: list[str] | None = None) -> dict[str, str]:
-    """Return the complete, scoped source-content snapshot for baseline reuse."""
-    scopes = submodules or []
-    snapshot = {}
-    for path in source_files(project):
-        rel = path.relative_to(project).as_posix()
-        if scopes and not any(rel == item.rstrip("/") or rel.startswith(item.rstrip("/") + "/") for item in scopes):
-            continue
-        digest = file_hash(path)
-        if digest: snapshot[rel] = digest
-    return dict(sorted(snapshot.items()))
+def changed_source_paths(project: Path, base_commit: str, current_commit: str | None = None) -> set[str]:
+    """Return production source paths changed between two committed snapshots."""
+    current = current_commit or git(project, "rev-parse", "HEAD")
+    lines = git(project, "diff", "--name-only", base_commit, current, "--", check=False).splitlines()
+    return {item.replace("\\", "/") for item in lines if is_supported_source_path(item)}
 
 
-def snapshot_changed(project: Path, saved: dict, submodules: list[str] | None = None) -> bool:
-    snapshot = saved.get("source_snapshot") if isinstance(saved, dict) else None
-    return not isinstance(snapshot, dict) or snapshot != source_snapshot(project, submodules)
-
-
-def refresh_observed_commit(project: Path, saved: dict) -> dict:
-    """Advance Git provenance after a no-op without changing the analyzed snapshot."""
-    current = git(project, "rev-parse", "HEAD")
-    if saved.get("observed_commit") != current:
-        saved["observed_commit"] = current; saved["observed_at"] = now()
-        atomic_json(skill_dir(project) / "baseline.json", saved)
-    return saved
+def snapshot_sources_clean(project: Path) -> bool:
+    """Reject workers that modify business source inside the analysis worktree."""
+    changed = git(project, "diff", "--name-only", "HEAD", "--", check=False).splitlines()
+    if any(is_supported_source_path(path) for path in changed):
+        return False
+    return not any(is_supported_source_path(path) for path in git(project, "ls-files", "--others", "--exclude-standard").splitlines())
 
 
 def active_record(project: Path) -> dict:
@@ -188,9 +196,9 @@ def inspect_resume(project: Path) -> dict:
         return {"ok": False, "reason": "current analysis is not resumable"}
     inputs = record.get("inputs")
     config = inputs.get("config") if isinstance(inputs, dict) else None
-    snapshot = record.get("source_snapshot")
-    if not isinstance(config, dict) or not isinstance(snapshot, dict):
-        return {"ok": False, "reason": "analysis predates resumable state snapshots"}
+    snapshot_commit = record.get("snapshot_commit")
+    if not isinstance(config, dict) or not isinstance(snapshot_commit, str):
+        return {"ok": False, "reason": "analysis predates Git snapshot resume state"}
     submodules = inputs.get("submodules", [])
     if not isinstance(submodules, list):
         return {"ok": False, "reason": "analysis has invalid saved scope"}
@@ -200,8 +208,8 @@ def inspect_resume(project: Path) -> dict:
         return {"ok": False, "reason": f"cannot validate saved analysis inputs: {exc}"}
     if fingerprint != record.get("fingerprint"):
         return {"ok": False, "reason": "knowledge, supplemental edges, or saved analysis configuration changed"}
-    if source_snapshot(project, submodules) != snapshot:
-        return {"ok": False, "reason": "supported source content changed since the interrupted analysis"}
+    if current_snapshot_commit(project) != snapshot_commit:
+        return {"ok": False, "reason": "active worktree no longer points at the saved snapshot commit"}
     phase = first_incomplete_phase(record)
     if not phase:
         return {"ok": False, "reason": "analysis has no resumable phase"}
@@ -266,17 +274,6 @@ def scoped_functions(project: Path, submodules: list[str]) -> list[dict]:
     if not index:
         return []
     return [item for item in index["functions"] if isinstance(item, dict) and isinstance(item.get("id"), str) and _in_scope(item, submodules)]
-
-
-def stripped_source_hash(path: Path) -> str | None:
-    """Return the exact hash of an extracted function source copy.
-
-    The old Skill embedded generated ``[SPEC]``/``[INFO]`` blocks in this
-    file.  Native FM-Agent keeps source immutable and stores those data in
-    sidecars, so no header stripping is valid any longer.  The legacy function
-    name remains to avoid breaking callers while their contracts migrate.
-    """
-    return file_hash(path)
 
 
 def is_metadata_sidecar(path: Path | str) -> bool:
@@ -364,16 +361,15 @@ def specification_artifacts_ready(project: Path, functions: list[dict], submodul
 
     This deliberately stops before checking logic-verification results: an
     incremental run must be able to finish updating specifications before its
-    subsequent verification phase produces new, hash-aligned results.
+    subsequent verification phase produces new snapshot-aligned results.
     """
     extracted = fm_dir(project) / "extracted_functions"
     expected_artifacts = set()
     for item in functions:
         function_id = item.get("id")
         rel = item.get("artifact") or item.get("extracted_path")
-        source_hash = item.get("source_hash")
-        if not isinstance(function_id, str) or not isinstance(rel, str) or not isinstance(source_hash, str):
-            return False, "source_index contains a function without id, artifact, or source_hash"
+        if not isinstance(function_id, str) or not isinstance(rel, str):
+            return False, "source_index contains a function without id or artifact"
         artifact = extracted / rel
         normalized_rel = Path(rel).as_posix()
         expected_artifacts.add(normalized_rel)
@@ -382,8 +378,6 @@ def specification_artifacts_ready(project: Path, functions: list[dict], submodul
         sidecars_ok, sidecars_reason = sidecars_ready(artifact)
         if not sidecars_ok:
             return False, f"incomplete specification for {function_id}: {sidecars_reason}"
-        if stripped_source_hash(artifact) != source_hash:
-            return False, f"source hash mismatch for {function_id}"
     actual_artifacts = _current_function_artifacts(extracted, submodules)
     stale_artifacts = actual_artifacts - expected_artifacts
     if stale_artifacts:
@@ -391,7 +385,7 @@ def specification_artifacts_ready(project: Path, functions: list[dict], submodul
     return True, ""
 
 
-def function_artifacts_ready(project: Path, functions: list[dict], submodules: list[str] | None = None) -> tuple[bool, str]:
+def function_artifacts_ready(project: Path, functions: list[dict], submodules: list[str] | None = None, snapshot_commit: str | None = None) -> tuple[bool, str]:
     extracted = fm_dir(project) / "extracted_functions"
     results = fm_dir(project) / "logic_verification_results"
     expected_artifacts = set()
@@ -399,9 +393,8 @@ def function_artifacts_ready(project: Path, functions: list[dict], submodules: l
     for item in functions:
         function_id = item.get("id")
         rel = item.get("artifact") or item.get("extracted_path")
-        source_hash = item.get("source_hash")
-        if not isinstance(function_id, str) or not isinstance(rel, str) or not isinstance(source_hash, str):
-            return False, "source_index contains a function without id, artifact, or source_hash"
+        if not isinstance(function_id, str) or not isinstance(rel, str):
+            return False, "source_index contains a function without id or artifact"
         artifact = extracted / rel
         expected_artifacts.add(Path(rel).as_posix())
         expected_results.add(Path(rel).with_suffix(".json").as_posix())
@@ -410,17 +403,14 @@ def function_artifacts_ready(project: Path, functions: list[dict], submodules: l
         sidecars_ok, sidecars_reason = sidecars_ready(artifact)
         if not sidecars_ok:
             return False, f"incomplete specification for {function_id}: {sidecars_reason}"
-        if stripped_source_hash(artifact) != source_hash:
-            return False, f"source hash mismatch for {function_id}"
         result_path = results / (str(Path(rel).with_suffix(".json")))
         result = read_json(result_path, None)
         if not isinstance(result, dict) or result.get("verdict") not in VERDICTS:
             return False, f"missing or invalid verification result for {function_id}"
         if result.get("function_id") != function_id:
             return False, f"verification function identity mismatch for {function_id}"
-        result_hash = result.get("source_hash")
-        if result_hash != source_hash:
-            return False, f"verification hash mismatch for {function_id}"
+        if result.get("snapshot_commit") != (snapshot_commit or current_snapshot_commit(project)):
+            return False, f"verification snapshot mismatch for {function_id}"
         if result.get("verdict") == "MATCH" and spec_confidence(artifact) != "high":
             return False, f"low-confidence specification cannot prove MATCH for {function_id}"
     actual_artifacts = _current_function_artifacts(extracted, submodules)
@@ -438,11 +428,11 @@ def selected_verification_ready(project: Path, functions: list[dict]) -> tuple[b
     """Validate only the current incremental selection without requiring a full rerun."""
     results = fm_dir(project) / "logic_verification_results"
     for item in functions:
-        rel, function_id, source_hash = item.get("artifact"), item.get("id"), item.get("source_hash")
-        if not all(isinstance(value, str) for value in (rel, function_id, source_hash)):
+        rel, function_id = item.get("artifact"), item.get("id")
+        if not all(isinstance(value, str) for value in (rel, function_id)):
             return False, "selected function lacks artifact identity"
         result = read_json(results / Path(rel).with_suffix(".json"), {})
-        if result.get("function_id") != function_id or result.get("source_hash") != source_hash or result.get("verdict") not in VERDICTS:
+        if result.get("function_id") != function_id or result.get("snapshot_commit") != current_snapshot_commit(project) or result.get("verdict") not in VERDICTS:
             return False, f"missing or stale selected verification result for {function_id}"
         artifact = fm_dir(project) / "extracted_functions" / rel
         if result.get("verdict") == "MATCH" and spec_confidence(artifact) != "high":
@@ -538,19 +528,21 @@ def inspect_baseline(project: Path, config_fingerprint: str, submodules: list[st
     if not isinstance(phases, dict) or not isinstance(phases.get("phases"), list):
         return {"valid": False, "reason": "missing or invalid fm_agent/phases.json"}
     saved = read_json(skill_dir(project) / "baseline.json", {})
-    if not isinstance(saved, dict) or saved.get("schema_version") != 3 or saved.get("fingerprint") != config_fingerprint:
+    if not isinstance(saved, dict) or saved.get("schema_version") != 4 or saved.get("fingerprint") != config_fingerprint:
         return {"valid": False, "reason": "analysis range or configuration is incompatible"}
-    commit = saved.get("analysis_commit")
+    commit = saved.get("baseline_commit")
     if not isinstance(commit, str):
         return {"valid": False, "reason": "missing successful baseline commit"}
     try:
         git(project, "cat-file", "-e", f"{commit}^{{commit}}")
     except RuntimeError:
         return {"valid": False, "reason": f"baseline commit is unavailable: {commit}"}
+    if baseline_commit(project) != commit:
+        return {"valid": False, "reason": "baseline Git ref does not match baseline record"}
     functions = scoped_functions(project, submodules or [])
     if not functions:
         return {"valid": False, "reason": "no indexed functions in the selected scope"}
-    ready, reason = function_artifacts_ready(project, functions)
+    ready, reason = function_artifacts_ready(project, functions, snapshot_commit=commit)
     if not ready:
         return {"valid": False, "reason": reason}
     layers_ready, layers_reason = phase_layers_ready(project)
@@ -558,11 +550,7 @@ def inspect_baseline(project: Path, config_fingerprint: str, submodules: list[st
         return {"valid": False, "reason": layers_reason}
     if not isinstance(saved.get("completed_at"), str):
         return {"valid": False, "reason": "baseline lacks completion provenance"}
-    if not isinstance(saved.get("source_snapshot"), dict):
-        return {"valid": False, "reason": "missing source snapshot"}
-    if not isinstance(saved.get("file_hashes"), dict):
-        return {"valid": False, "reason": "missing per-file baseline hashes"}
-    return {"valid": True, "commit": commit, "function_count": len(functions), "snapshot_changed": snapshot_changed(project, saved, submodules), "saved": saved}
+    return {"valid": True, "commit": commit, "function_count": len(functions), "saved": saved}
 
 
 def untracked_sources(project: Path) -> list[str]:
@@ -571,12 +559,11 @@ def untracked_sources(project: Path) -> list[str]:
 
 def is_supported_source_path(value: str) -> bool:
     path = value.replace("\\", "/")
-    return Path(path).suffix.lower() in SOURCE_EXTENSIONS and not path.startswith(("fm_agent/", "fm_agent_skill/", "fm_agent_plugin/")) and not is_test_source_path(path)
+    return Path(path).suffix.lower() in SOURCE_EXTENSIONS and not path.startswith(("fm_agent/", "fm_agent_skill/")) and not is_test_source_path(path)
 
 
 def changed_since(project: Path, commit: str) -> bool:
-    tracked = git(project, "diff", "--name-only", commit, "--", check=False).splitlines()
-    return any(is_supported_source_path(path) for path in tracked) or bool(untracked_sources(project))
+    return bool(changed_source_paths(project, commit))
 
 
 def build_intent(project: Path, base_commit: str, note: str) -> Path:
