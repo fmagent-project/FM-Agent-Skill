@@ -181,13 +181,23 @@ Skill control state, then supply that file to `executor.py graph`:
 ```
 
 Before each phase emit the required `Stage current/total` status, then call
-`pipeline.py phase-start`. For every semantic unit, create its job manifest
-with `scheduler.py create`, call `scheduler.py start`, launch exactly the
-mapped named worker with the host subagent mechanism, then call `scheduler.py complete`
-only after its outputs validate. Start at most configured `concurrency`
-background workers, join the jobs required by this phase, then call
-`pipeline.py phase-complete` and emit the short completion status. A failed
-gate means do not enter the next phase. On every exception, tool failure, or user-requested stop, run
+`pipeline.py phase-start`. Every semantic job manifest must include its current
+pipeline `phase`. Use `scheduler.py admissible` to obtain a capacity-compatible
+candidate, then call `scheduler.py start` immediately before launching exactly
+that mapped worker with the host subagent mechanism. `start` is the enforced
+lease: if it rejects capacity, do not launch the worker; wait for a completion
+and obtain a fresh admissible list. Never pre-launch a batch from `ready`.
+
+Give a worker only its job manifest inputs and direct evidence. It writes full
+evidence to its assigned output and returns a ≤4 KiB JSON receipt with matching
+`job_id`, `status`, output paths, optional verdict/counts, and one-sentence
+summary. Call `scheduler.py complete` only after its outputs validate. After
+joining the jobs required by a phase, call
+`scheduler.py phase-receipt --project "$PROJECT" --phase "$PHASE"`; use that
+small receipt as the normal fan-in. Read detailed worker artifacts only for
+listed escalations (`MISMATCH`, `DEPENDENCY_RISK`, `INCONCLUSIVE`, `ERROR`, or
+failure), then call `pipeline.py phase-complete` and emit the short completion
+status. A failed gate means do not enter the next phase. On every exception, tool failure, or user-requested stop, run
 `pipeline.py fail`; it releases its owned lock while preserving artifacts and
 the active analysis state. `pipeline.py complete` likewise releases its owned lock.
 Report the last completed phase and the phase that did not finish.
@@ -215,19 +225,19 @@ Use the worker names exactly as follows: `fm-phase-plan-worker`, optional
 `fm-incremental-spec-plan-worker`, and `fm-reconcile-caller-info-worker`.
 Pass each worker the project path, job id, exact inputs, assigned
 outputs, and required reference files. A worker must return its concise JSON
-summary; workers cannot spawn other workers. The Coordinator is the only
-writer of `fm_agent_skill/jobs/` and all other control state.
+receipt; workers cannot spawn other workers. The Coordinator is the only
+writer of `fm_agent_skill/jobs/`, phase receipts, and all other control state.
 
 For each specification job, provide only the assigned extracted artifacts and
 permitted header, domain, and caller evidence. Do not read test files. Require
 the worker to emit evidence and confidence in every spec sidecar; never
 schedule a `MATCH` from a low-confidence or implementation-derived contract.
 
-For incremental planning, `fm-incremental-spec-plan-worker` returns an update
-plan in its response and writes no files. Record that response through
-`scheduler.py complete --result-json`, validate it, then serially apply sidecar
-updates before scheduling caller reconciliation. Do not let two active workers
-write the same artifact or report path.
+For incremental planning, give `fm-incremental-spec-plan-worker` exactly one
+assigned output: `fm_agent_skill/worker_reports/<job-id>.json`. It writes the
+full update plan there and returns only its receipt naming `plan_path`. After
+validation, serially apply that path before scheduling caller reconciliation.
+Do not let two active workers write the same artifact or report path.
 
 After each selector record is validated, merge it only through:
 
@@ -236,12 +246,12 @@ After each selector record is validated, merge it only through:
   --project "$PROJECT" --record "$SELECTOR_OUTPUT" --reason caller-propagation
 ```
 
-Use `callee-propagation` or `spec-change` when that is the actual reason. Save
-an accepted incremental-plan response as JSON, then apply it only through:
+Use `callee-propagation` or `spec-change` when that is the actual reason. Apply
+an accepted incremental-plan report only through:
 
 ```bash
 <python3> "$FM_AGENT_SKILL_ROOT/scripts/incremental.py" apply-plan \
-  --project "$PROJECT" --plan "$PLAN_JSON"
+  --project "$PROJECT" --plan "$PLAN_PATH"
 ```
 
 When an Agent call fails, classify it before scheduling anything downstream.

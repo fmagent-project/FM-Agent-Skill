@@ -100,8 +100,10 @@ The Coordinator is the only writer of `fm_agent_skill/` state. It maps phase
 planning, domain context, specification batches, function verification, Bug
 Validator, incremental selection, update planning, and caller reconciliation
 to named host subagents. It runs phases serially, dispatches independent
-same-layer jobs in parallel up to `concurrency` (default `10`), and joins them
-before each gate. Read
+same-layer jobs with an enforced global maximum of `10` workers (specification
+`4`, verification `8`, Bug Validator `1`, read-only planning `2`), and joins
+them before each gate. The Coordinator receives compact worker receipts and
+uses a phase receipt to inspect only escalations. Read
 [the scheduler contract](plugins/fm-agent-skill/references/subagent-scheduler.md)
 for the worker mapping and recovery rules.
 
@@ -342,7 +344,7 @@ full、incremental 和 resume 都会在每个阶段前显示“当前阶段/总�
 ## Claude worker 调度、失败与恢复
 
 Coordinator 是 `fm_agent_skill/` 的唯一写入者。它按阶段串行推进，在同一调用层内最多并发
-`concurrency`（默认 10）个独立 Claude worker；join 后必须通过 gate 才能进入下一阶段。
+全局最多运行 4 个独立 worker（规格 2、验证 4、Bug Validator 1、只读增量计划 2）；调度器在启动前强制占用名额，join 后写入阶段回执并通过 gate 才能进入下一阶段。
 每个语义单元有固定 job id，保存在 `fm_agent_skill/jobs/<job-id>.json`。
 
 超时、限流、Agent 工具失败、缺失产物或无效产物会成为 `retryable`。Coordinator 会在**同一个

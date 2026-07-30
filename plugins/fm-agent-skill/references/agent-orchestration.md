@@ -7,19 +7,31 @@ imports, or shells out to the original FM-Agent.
 The Coordinator is the Skill equivalent of `main.py`: it owns the current
 analysis state, lock heartbeat, deterministic scripts, phase gates, retries,
 and user-visible status. Named semantic workers do only their assigned
-analysis. They cannot spawn workers or write `fm_agent_skill/` control state.
+analysis. They cannot spawn workers or write `fm_agent_skill/` control state;
+the sole exception is an assigned immutable worker report under
+`fm_agent_skill/worker_reports/<job-id>.json`.
 
 Use only two target-project output roots: `fm_agent/` for FM-Agent-compatible
 analysis artifacts and `fm_agent_skill/` for mutable Skill state. Derive no
 target-project path from the Skill's installation or marketplace packaging.
 Give each worker only the exact allowed output paths from its job manifest.
 
-For every phase, call `pipeline.py phase-start`, create/start/join required
-jobs, validate them through `scheduler.py complete`, then call
-`pipeline.py phase-complete`. On success use `pipeline.py complete`; on a
-terminal failure use `pipeline.py fail`. An explicit resume continues the
-single `active.json` analysis and its first incomplete phase; it does not make a
-new analysis identity or repeat valid work.
+For every phase, call `pipeline.py phase-start`, create phase-labelled jobs,
+use `scheduler.py admissible`, then `scheduler.py start` to acquire each
+bounded worker slot before launching it. Join required jobs and validate their
+small receipts through `scheduler.py complete`. Next create
+`scheduler.py phase-receipt --phase <phase>` and inspect only its counts and
+escalations before calling `pipeline.py phase-complete`. On success use
+`pipeline.py complete`; on a terminal failure use `pipeline.py fail`. An
+explicit resume continues the single `active.json` analysis and its first
+incomplete phase; it does not make a new analysis identity or repeat valid work.
+
+Keep the Coordinator as a control plane, not a second reasoning worker. Give a
+semantic worker only its assigned artifacts plus direct evidence; never give it
+the whole repository or a prior worker transcript. Workers cannot spawn other
+workers. Detailed worker output belongs in the assigned artifact; their final
+response is a short structured receipt. Read detailed artifacts only for a
+receipt escalation or a required deterministic validation.
 
 ## Deterministic executor
 

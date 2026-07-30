@@ -13,12 +13,14 @@ each knowledge-file content hash. It exists to prevent an incremental run from
 reusing specifications built for a different scope or knowledge set.
 
 `scheduler_executor` is fixed to `host-subagent`: semantic work uses the active
-Claude Code or Codex subagent facility. `concurrency` is the maximum number of
-simultaneously active host workers, matching the original FM-Agent worker
-limit by default (`10`). `spec_batch_size` defaults to `2`, matching the
-original batch-prompt granularity. `bug_validation_max_attempts` defaults to
-`1`, matching FM-Agent's Bug Validator retry limit. These values are analysis
-configuration and therefore participate in the fingerprint.
+Claude Code or Codex subagent facility. The enforced default profile is ten
+active workers globally, two specification batches, four verification workers,
+one Bug Validator, and two read-only incremental plan workers. Configure these
+through `max_active_subagents`, `spec_concurrency`, `verify_concurrency`,
+`bug_validation_concurrency`, and `read_only_plan_concurrency`.
+`spec_batch_size` defaults to `1`; `bug_validation_max_attempts` defaults to
+`1`, matching FM-Agent's Bug Validator retry limit. These scheduling and retry
+limits are operational only and are excluded from the analysis fingerprint.
 
 Every analysis creates one detached Git worktree from a private snapshot
 commit. The snapshot captures tracked and non-ignored working-tree changes

@@ -123,7 +123,9 @@ def fingerprint(project: Path, one_phase: bool, submodules: list[str], extra_edg
     # A resume grace period controls lock recovery, not the meaning or scope of
     # an analysis.  It must not invalidate baselines or interrupted runs.
     fingerprint_config = dict(config or {})
-    fingerprint_config.pop("resume_grace_seconds", None)
+    # Scheduling changes alter resource use, not the meaning of an analysis.
+    for key in ("resume_grace_seconds", "scheduler_executor", "max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "spec_batch_size", "retries", "lock_ttl_seconds", "bug_validation_max_attempts"):
+        fingerprint_config.pop(key, None)
     inputs = {
         "one_phase": bool(one_phase),
         "submodules": sorted(dict.fromkeys(submodules)),

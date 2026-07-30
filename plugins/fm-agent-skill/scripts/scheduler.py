@@ -14,6 +14,21 @@ JOB_TYPES = {"phase_plan", "phase_refine", "domain_context", "resolve_agent_stat
 RETRYABLE_FAILURES = {"execution", "output", "interrupted"}
 FAILURE_CLASSES = RETRYABLE_FAILURES | {"input", "semantic", "cancelled"}
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+MAX_REPORT_BYTES = 4096
+REPORT_KEYS = {"job_id", "status", "outputs", "verdict", "classification", "escalation", "counts", "summary", "plan_path"}
+TYPE_CAP_KEYS = {
+    "spec_batch": "spec_concurrency",
+    "verify_function": "verify_concurrency",
+    "bug_validate": "bug_validation_concurrency",
+    "incremental_spec_plan": "read_only_plan_concurrency",
+}
+DEFAULT_CAPS = {
+    "max_active_subagents": 10,
+    "spec_concurrency": 4,
+    "verify_concurrency": 8,
+    "bug_validation_concurrency": 1,
+    "read_only_plan_concurrency": 2,
+}
 
 def _safe_id(value):
     if not ID.fullmatch(value or ""): raise ValueError("invalid job id")
@@ -28,13 +43,61 @@ def _inside(target, value):
     path = Path(value)
     if path.is_absolute() or ".." in path.parts: raise ValueError("job paths must be project-relative and cannot traverse parent directories")
     rel = path.as_posix()
-    if not (rel.startswith("fm_agent/") or rel.startswith("fm_agent_skill/probes/")): raise ValueError("worker output must stay in fm_agent/ or fm_agent_skill/probes/")
+    if not (rel.startswith("fm_agent/") or rel.startswith("fm_agent_skill/probes/") or rel.startswith("fm_agent_skill/worker_reports/")): raise ValueError("worker output must stay in fm_agent/, fm_agent_skill/probes/, or its assigned worker report")
     if target not in (target / path).resolve().parents: raise ValueError("job path escapes project")
     return rel
 def _artifact(value):
     path = Path(value)
     if path.is_absolute() or ".." in path.parts: raise ValueError("artifact paths must stay under extracted_functions")
     return path.as_posix()
+def _phase(value):
+    if not isinstance(value, str) or not ID.fullmatch(value): raise ValueError("phase must be a valid phase id")
+    return value
+def _caps(target):
+    saved = state.read_json(state.skill_dir(target) / "config.json", {})
+    result = dict(DEFAULT_CAPS)
+    if isinstance(saved, dict):
+        for key in result:
+            value = saved.get(key)
+            if isinstance(value, int) and value > 0: result[key] = value
+    return result
+def _type_cap(job_type, caps):
+    return caps.get(TYPE_CAP_KEYS.get(job_type), 1)
+def _running(target):
+    root = state.skill_dir(target) / "jobs"
+    jobs = [state.read_json(path, {}) for path in sorted(root.glob("*.json"))] if root.is_dir() else []
+    return [job for job in jobs if isinstance(job, dict) and job.get("status") == "running"]
+def _capacity(target):
+    caps, running = _caps(target), _running(target)
+    by_type = {kind: sum(1 for job in running if job.get("type") == kind) for kind in JOB_TYPES}
+    return {"caps": caps, "active": len(running), "by_type": by_type}
+def _admission_error(target, job):
+    capacity = _capacity(target); caps = capacity["caps"]
+    if capacity["active"] >= caps["max_active_subagents"]:
+        return f"global subagent capacity reached ({capacity['active']}/{caps['max_active_subagents']})"
+    limit = _type_cap(job["type"], caps); active = capacity["by_type"].get(job["type"], 0)
+    if active >= limit: return f"{job['type']} capacity reached ({active}/{limit})"
+    return None
+def _validate_report(job, result):
+    # Keep interrupted analyses created by the pre-receipt scheduler resumable.
+    # New manifests always carry phase + receipt requirements.
+    if job.get("legacy_contract"):
+        return None
+    if not isinstance(result, dict): return "worker report must be a JSON object"
+    try: size = len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError): return "worker report must be JSON-serializable"
+    if size > MAX_REPORT_BYTES: return f"worker report exceeds {MAX_REPORT_BYTES} bytes; write detail to its assigned output"
+    unknown = set(result) - REPORT_KEYS
+    if unknown: return "worker report has unsupported keys: " + ", ".join(sorted(unknown))
+    if result.get("job_id") != job["id"]: return "worker report job_id does not match manifest"
+    if not isinstance(result.get("status"), str) or not result["status"].strip(): return "worker report requires non-empty status"
+    if "outputs" in result and (not isinstance(result["outputs"], list) or not all(isinstance(item, str) for item in result["outputs"])): return "worker report outputs must be a string array"
+    if "verdict" in result and result["verdict"] not in state.VERDICTS: return "worker report has invalid verdict"
+    if "summary" in result and (not isinstance(result["summary"], str) or len(result["summary"]) > 500): return "worker report summary must be at most 500 characters"
+    if job["type"] == "incremental_spec_plan":
+        expected = f"fm_agent_skill/worker_reports/{job['id']}.json"
+        if result.get("plan_path") != expected: return "incremental plan report must name its assigned plan_path"
+    return None
 def _limit(target, payload):
     config = state.read_json(state.skill_dir(target) / "config.json", {})
     default = config.get("bug_validation_max_attempts", 1) if isinstance(config, dict) and payload.get("type") == "bug_validate" else (config.get("retries", 5) if isinstance(config, dict) else 5)
@@ -64,13 +127,18 @@ def create(target, payload):
     job_id, kind = payload.get("id"), payload.get("type"); _safe_id(job_id)
     if kind not in JOB_TYPES: raise ValueError("unsupported job type")
     if _path(target, job_id).exists(): raise ValueError("job already exists")
-    deps, outputs, artifacts = payload.get("depends_on", []), payload.get("required_outputs", []), payload.get("artifacts", [])
+    legacy_contract = "phase" not in payload
+    phase = _phase(payload.get("phase", "unspecified")); deps, outputs, artifacts = payload.get("depends_on", []), payload.get("required_outputs", []), payload.get("artifacts", [])
     if not all(isinstance(item, str) and ID.fullmatch(item) for item in deps): raise ValueError("invalid dependency id")
     if not all(isinstance(item, str) for item in outputs + artifacts): raise ValueError("job paths must be strings")
     outputs = [_inside(target, item) for item in outputs]
     if len(set(outputs)) != len(outputs): raise ValueError("duplicate required output")
-    if kind == "incremental_spec_plan" and outputs: raise ValueError("incremental spec planning returns a plan; it must not write artifacts")
-    job = {"schema_version": 1, "id": job_id, "type": kind, "status": "queued", "depends_on": deps, "required_outputs": outputs, "artifacts": [_artifact(item) for item in artifacts], "attempts": 0, "max_attempts": _limit(target, payload), "created_at": state.now(), "updated_at": state.now()}
+    worker_report = f"fm_agent_skill/worker_reports/{job_id}.json"
+    if worker_report in outputs and outputs.count(worker_report) != 1: raise ValueError("worker report may appear only once")
+    if any(item.startswith("fm_agent_skill/worker_reports/") and item != worker_report for item in outputs): raise ValueError("worker report path must match its job id")
+    if kind == "incremental_spec_plan" and not legacy_contract and outputs != [worker_report]: raise ValueError("incremental spec planning must write only its assigned worker report")
+    job = {"schema_version": 2, "id": job_id, "phase": phase, "type": kind, "status": "queued", "depends_on": deps, "required_outputs": outputs, "artifacts": [_artifact(item) for item in artifacts], "attempts": 0, "max_attempts": _limit(target, payload), "created_at": state.now(), "updated_at": state.now()}
+    if legacy_contract: job["legacy_contract"] = True
     if isinstance(payload.get("input"), dict): job["input"] = payload["input"]
     _save(target, job); return job
 def ready(target):
@@ -82,14 +150,43 @@ def ready(target):
         except ValueError: continue
         if all(item.get("status") == "succeeded" for item in deps): result.append(job)
     return result
+def admissible(target):
+    """Return a deterministic, capacity-respecting subset of ready jobs."""
+    capacity = _capacity(target); caps = capacity["caps"]; active = capacity["active"]
+    by_type = dict(capacity["by_type"]); result = []
+    for job in ready(target):
+        if active >= caps["max_active_subagents"]: break
+        limit = _type_cap(job["type"], caps); used = by_type.get(job["type"], 0)
+        if used >= limit: continue
+        result.append(job); active += 1; by_type[job["type"]] = used + 1
+    return {"capacity": capacity, "jobs": result}
+def phase_receipt(target, phase):
+    phase = _phase(phase); root = state.skill_dir(target) / "jobs"
+    jobs = [state.read_json(path, {}) for path in sorted(root.glob("*.json"))] if root.is_dir() else []
+    jobs = [job for job in jobs if isinstance(job, dict) and job.get("phase") == phase]
+    totals = {status: sum(1 for job in jobs if job.get("status") == status) for status in ("queued", "running", "retryable", "failed", "succeeded")}
+    escalations = []
+    for job in jobs:
+        result = job.get("result", {}) if isinstance(job.get("result"), dict) else {}
+        verdict = result.get("verdict")
+        reason = None
+        if job.get("status") in {"failed", "retryable"}: reason = job.get("failure_class", job.get("status"))
+        elif verdict in {"MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"}: reason = verdict
+        elif result.get("escalation") not in {None, "", "none", "NONE", False}: reason = "worker_escalation"
+        if reason: escalations.append({"job_id": job.get("id"), "type": job.get("type"), "reason": reason})
+    receipt = {"schema_version": 1, "phase": phase, "generated_at": state.now(), "totals": totals, "gate_ready": totals["queued"] == totals["running"] == totals["retryable"] == totals["failed"] == 0, "escalations": escalations}
+    path = state.control_dir(target) / "phase_receipts" / f"{phase}.json"; state.atomic_json(path, receipt)
+    return {"receipt_path": path.relative_to(target).as_posix(), **receipt}
 def transition(target, job_id, action, result, message, failure_class):
     job = _load(target, job_id); job.setdefault("max_attempts", _limit(target, job))
     if action == "start":
         if job["status"] != "queued" or job not in ready(target): raise ValueError("job is not ready")
+        error = _admission_error(target, job)
+        if error: raise ValueError(error)
         job["status"] = "running"; job["attempts"] += 1; job["started_at"] = state.now()
     elif action == "complete":
         if job["status"] != "running": raise ValueError("only a running job can complete")
-        error = _validate(target, job)
+        error = _validate_report(job, result) or _validate(target, job)
         if error: _fail(job, "output", error)
         else:
             job["status"] = "succeeded"; job["completed_at"] = state.now()
@@ -114,14 +211,19 @@ def recover(target):
         _save(target, job)
     return {"recovered_succeeded": succeeded, "retryable": retryable}
 def main():
-    parser = argparse.ArgumentParser(description="Record and validate current FM-Agent host worker jobs.")
-    parser.add_argument("action", choices=("create", "ready", "start", "complete", "fail", "retry", "recover", "show")); parser.add_argument("--project", required=True); parser.add_argument("--job-id"); parser.add_argument("--job-json"); parser.add_argument("--result-json"); parser.add_argument("--message"); parser.add_argument("--failure-class", choices=tuple(sorted(FAILURE_CLASSES)), default="execution")
+    parser = argparse.ArgumentParser(description="Record, admit, and validate bounded current FM-Agent host worker jobs.")
+    parser.add_argument("action", choices=("create", "ready", "admissible", "capacity", "phase-receipt", "start", "complete", "fail", "retry", "recover", "show")); parser.add_argument("--project", required=True); parser.add_argument("--job-id"); parser.add_argument("--phase"); parser.add_argument("--job-json"); parser.add_argument("--result-json"); parser.add_argument("--message"); parser.add_argument("--failure-class", choices=tuple(sorted(FAILURE_CLASSES)), default="execution")
     args = parser.parse_args(); target = project(args)
     try:
         if args.action == "create":
             if not args.job_json: raise ValueError("--job-json is required")
             response = create(target, json.loads(args.job_json))
         elif args.action == "ready": response = {"jobs": ready(target)}
+        elif args.action == "admissible": response = admissible(target)
+        elif args.action == "capacity": response = _capacity(target)
+        elif args.action == "phase-receipt":
+            if not args.phase: raise ValueError("--phase is required")
+            response = phase_receipt(target, args.phase)
         elif args.action == "recover": response = recover(target)
         else:
             if not args.job_id: raise ValueError("--job-id is required")

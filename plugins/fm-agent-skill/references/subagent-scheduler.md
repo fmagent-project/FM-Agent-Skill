@@ -7,11 +7,20 @@ control state, phase transitions, lock heartbeats, and user-visible status.
 
 ## Job lifecycle
 
-For each semantic job, the Coordinator calls `scheduler.py create`, then
-`scheduler.py start`, invokes the mapped host subagent, validates its concise
-report, and calls `scheduler.py complete`. Workers may write only their assigned
-sidecars, result JSON, or probe output; they never write manifests or control
-state.
+For each semantic job, the Coordinator calls `scheduler.py create` with its
+pipeline `phase`, then obtains `scheduler.py admissible`. For each returned
+job, call `scheduler.py start` **before** invoking the host subagent. `start`
+is the admission point: it atomically rejects a job when its global or
+type-specific capacity is full. Never launch a worker merely because it was
+previously listed as ready.
+
+The worker writes detailed evidence only to its assigned artifact or, for an
+incremental plan, to `fm_agent_skill/worker_reports/<job-id>.json`. Its final
+response is a JSON receipt of at most 4 KiB with `job_id`, `status`, output
+paths, counts, an optional verdict, and at most a one-sentence summary. The
+Coordinator passes that receipt to `scheduler.py complete`; it does not paste
+worker reasoning or source excerpts into its own context. Workers never write
+job manifests, phase receipts, locks, or other control state.
 
 Retain the same job id for retries. `execution`, `output`, and `interrupted`
 failures use `scheduler.py fail`; if retryable, call `scheduler.py retry` after
@@ -25,7 +34,12 @@ requeue in place when attempts remain.
 
 Job files live temporarily at `fm_agent_skill/jobs/<job-id>.json`. They are
 removed after a successful analysis and retained only to resume a failed one.
-Concurrent jobs cannot share an output path.
+Concurrent jobs cannot share an output path. After joining a phase, the
+Coordinator runs `scheduler.py phase-receipt --phase <phase>`; it writes the
+small aggregate record at `fm_agent_skill/control/phase_receipts/<phase>.json`.
+The Coordinator reads that receipt, then reads detailed artifacts only for an
+escalation (`MISMATCH`, `DEPENDENCY_RISK`, `INCONCLUSIVE`, `ERROR`, or worker
+failure) before its normal gate.
 
 ## Worker mapping
 
@@ -45,9 +59,24 @@ Concurrent jobs cannot share an output path.
 
 ## Concurrency
 
-Use configured `concurrency` as the maximum active host subagents (default 10).
-Run phases serially; run independent batches in a caller-first layer in
-parallel. Verification can start as soon as its own sidecars validate. Join all
-jobs required by a phase and pass its gate before advancing. Each host-specific
-adapter supplies the actual subagent call; the manifest, boundaries, retries,
-and artifact contract are identical in Claude Code and Codex.
+The default bounded profile is deliberately conservative for a context-limited
+Coordinator:
+
+| Work type | Maximum active jobs |
+| --- | ---: |
+| all host subagents | 10 |
+| `spec_batch` | 4 |
+| `verify_function` | 8 |
+| `bug_validate` | 1 |
+| `incremental_spec_plan` | 2 |
+| phase/refine/domain/edge/select/reconcile workers | 1 each |
+
+The corresponding configuration keys are `max_active_subagents`,
+`spec_concurrency`, `verify_concurrency`, `bug_validation_concurrency`, and
+`read_only_plan_concurrency`. They are operational limits, not semantic inputs:
+changing them does not invalidate an otherwise valid Git baseline. Use
+`scheduler.py capacity` to inspect current leases. Phases remain serial;
+independent caller-first-layer work may be parallel, verification may start as
+soon as its sidecars validate, and every phase must join and emit its receipt
+before its gate. The active host supplies the actual subagent call; the Skill
+enforces admission and artifact contracts on both Claude Code and Codex.

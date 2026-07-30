@@ -26,8 +26,8 @@ def reset(target):
         "incremental_*.log", "workflow_*.md",
     ):
         native.extend(fm.glob(pattern))
-    skill = [control / name for name in ("analysis_index.json", "call_graph_precision.json", "graph_edges.json", "agent_static_edges.json", "preserved_specs.json", "diff.json", "incremental_decision.json")]
-    for path in native + skill + [state.skill_dir(target) / "jobs", state.skill_dir(target) / "probes", state.skill_dir(target) / "runs"]: remove(path)
+    skill = [control / name for name in ("analysis_index.json", "call_graph_precision.json", "graph_edges.json", "agent_static_edges.json", "preserved_specs.json", "diff.json", "incremental_decision.json", "phase_receipts")]
+    for path in native + skill + [state.skill_dir(target) / "jobs", state.skill_dir(target) / "worker_reports", state.skill_dir(target) / "probes", state.skill_dir(target) / "runs"]: remove(path)
     return {"ok": True, "preserved": str(fm / "phases.json")}
 
 
@@ -45,7 +45,7 @@ def reset_incremental_artifacts(target):
         "spec_update_*.md", "spec_update_*.json", "incremental_*.log",
     ):
         paths.extend(fm.glob(pattern))
-    paths += [state.control_dir(target) / "graph_edges.json", state.control_dir(target) / "agent_static_edges.json", state.skill_dir(target) / "jobs", state.skill_dir(target) / "probes", state.skill_dir(target) / "runs"]
+    paths += [state.control_dir(target) / "graph_edges.json", state.control_dir(target) / "agent_static_edges.json", state.control_dir(target) / "phase_receipts", state.skill_dir(target) / "jobs", state.skill_dir(target) / "worker_reports", state.skill_dir(target) / "probes", state.skill_dir(target) / "runs"]
     for path in paths:
         remove(path)
     return {"ok": True, "preserved": str(fm / "extracted_functions")}
@@ -53,7 +53,7 @@ def reset_incremental_artifacts(target):
 
 def clear_transient(target):
     """Discard current scheduler/probe work after a terminal successful analysis."""
-    for path in (state.skill_dir(target) / "jobs", state.skill_dir(target) / "probes"):
+    for path in (state.skill_dir(target) / "jobs", state.skill_dir(target) / "worker_reports", state.skill_dir(target) / "probes"):
         remove(path)
     return {"ok": True}
 

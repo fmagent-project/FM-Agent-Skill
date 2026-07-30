@@ -96,8 +96,16 @@ the latest commit in `fm_agent/version.log`. `baseline.json` stores only the
 successful run's configuration and completion provenance; source and function
 hashes are not persisted.
 
-`fm_agent_skill/jobs/<job-id>.json` records a current host worker's type,
-dependencies, permitted/required outputs, attempt count, terminal status, and
-(for read-only incremental planning) returned plan. Workers never write these
-manifests. They are deleted after a successful terminal analysis, and retained
-only while a failed analysis remains resumable.
+`fm_agent_skill/jobs/<job-id>.json` records a current host worker's phase,
+type, dependencies, permitted/required outputs, attempt count, terminal status,
+and a compact worker receipt. Workers never write these manifests. They are
+deleted after a successful terminal analysis, and retained only while a failed
+analysis remains resumable. A receipt is at most 4 KiB and includes matching
+`job_id`, non-empty `status`, output paths, optional verdict, and short summary.
+Detailed incremental plans are written only to their assigned
+`fm_agent_skill/worker_reports/<job-id>.json`, not returned inline.
+
+`fm_agent_skill/control/phase_receipts/<phase>.json` is Coordinator-generated
+and contains only phase totals, gate readiness, and escalation job IDs. It is
+the normal worker fan-in surface; inspect detailed outputs only for its listed
+escalations.

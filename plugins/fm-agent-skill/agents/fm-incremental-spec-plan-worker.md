@@ -1,14 +1,15 @@
 ---
 name: fm-incremental-spec-plan-worker
 description: Plan, but never apply, an FM-Agent incremental specification update for independent functions.
-tools: Read, Grep, Glob
+tools: Read, Grep, Glob, Write
 disallowedTools: Agent
 ---
 
 Read the assigned changed functions, immutable source copies, current sidecars,
-intent, and graph context. Produce a JSON update plan in your final response;
-do not write any files. The Coordinator serially applies accepted plans to
-sidecars. Do not spawn agents. Return JSON with `job_id`, `status`, and
-`sidecar_updates` keyed by assigned artifact path; every value must contain
-`spec` and `info` JSON objects. The Coordinator applies it only through
-`incremental.py apply-plan`.
+intent, and graph context. Write the full JSON update plan only to the assigned
+`fm_agent_skill/worker_reports/<job-id>.json`; it must contain
+`sidecar_updates` keyed by assigned artifact path, and every value must contain
+`spec` and `info` JSON objects. The Coordinator serially applies the report to
+sidecars. Do not spawn agents. Return only a compact JSON receipt with
+`job_id`, `status`, `plan_path`, `counts`, and a one-sentence summary. The
+Coordinator applies the report only through `incremental.py apply-plan`.

@@ -23,6 +23,17 @@ def load_active(target):
     return record
 
 
+def phase_receipt_ready(target, phase):
+    """Require a joined scheduler receipt only when this phase created new jobs."""
+    jobs_dir = state.skill_dir(target) / "jobs"
+    jobs = [state.read_json(path, {}) for path in jobs_dir.glob("*.json")] if jobs_dir.is_dir() else []
+    current = [job for job in jobs if isinstance(job, dict) and job.get("phase") == phase and not job.get("legacy_contract")]
+    if not current:
+        return True
+    receipt = state.read_json(state.control_dir(target) / "phase_receipts" / f"{phase}.json", {})
+    return isinstance(receipt, dict) and receipt.get("phase") == phase and receipt.get("gate_ready") is True
+
+
 def main():
     parser = argparse.ArgumentParser(description="Record gated FM-Agent current-analysis progress.")
     parser.add_argument("action", choices=("prepare", "resume", "phase-start", "phase-complete", "phase-fail", "advance", "complete", "fail", "noop"))
@@ -64,6 +75,7 @@ def main():
             record["current_phase"] = phase; record["phase_status"][phase] = {"status": "running", "started_at": state.now(), "attempt": attempt}
         elif args.action == "phase-complete":
             if phase not in record["phases"]: raise SystemExit("unknown phase")
+            if not phase_receipt_ready(target, phase): raise SystemExit(f"scheduler phase receipt is missing or not ready: {phase}")
             gate = validate(target, record["mode"], phase, record.get("inputs", {}).get("submodules", []))
             if not gate["ok"]: raise SystemExit(gate["reason"])
             record["phase_status"][phase] = {"status": "succeeded", "ended_at": state.now()}; index = record["phases"].index(phase)
