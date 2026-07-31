@@ -20,6 +20,8 @@ import subprocess
 SOURCE_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".cu", ".cuh", ".go", ".h", ".hpp", ".java", ".js", ".jsx", ".py", ".rs", ".ts", ".tsx", ".ets"}
 METADATA_SIDECAR_SUFFIXES = (".spec.json", ".info.json")
 VERDICTS = {"MATCH", "MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"}
+BUG_ATTEMPT_CLASSIFICATIONS = {"confirmed", "not_reproduced", "inconclusive"}
+BUG_FINAL_STATUSES = {"confirmed", "rejected", "inconclusive"}
 SPEC_FIELDS = {"signature", "pre_condition", "post_condition", "evidence", "confidence"}
 CALLEE_FIELDS = {"name", "signature", "pre_condition", "post_condition"}
 EXTERNAL_EVIDENCE_KINDS = {"header", "domain_knowledge", "caller"}
@@ -441,6 +443,101 @@ def selected_verification_ready(project: Path, functions: list[dict]) -> tuple[b
         artifact = fm_dir(project) / "extracted_functions" / rel
         if result.get("verdict") == "MATCH" and spec_confidence(artifact) != "high":
             return False, f"low-confidence specification cannot prove MATCH for {function_id}"
+    return True, ""
+
+
+def direct_mismatch_ids(project: Path, selected_ids: set[str] | None = None) -> set[str]:
+    """Return current-snapshot direct verification candidates only."""
+    results = fm_dir(project) / "logic_verification_results"
+    current = current_snapshot_commit(project)
+    found = set()
+    for path in results.rglob("*.json") if results.is_dir() else []:
+        result = read_json(path, {})
+        function_id = result.get("function_id") if isinstance(result, dict) else None
+        if (
+            result.get("verdict") == "MISMATCH"
+            and result.get("snapshot_commit") == current
+            and isinstance(function_id, str)
+            and (selected_ids is None or function_id in selected_ids)
+        ):
+            found.add(function_id)
+    return found
+
+
+def _project_relative(project: Path, value) -> Path | None:
+    if not isinstance(value, str):
+        return None
+    candidate = Path(value)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    resolved = (project / candidate).resolve()
+    return resolved if project.resolve() in resolved.parents else None
+
+
+def _dynamic_attempt_ready(project: Path, attempt: dict, snapshot_commit: str) -> tuple[bool, str]:
+    if not isinstance(attempt, dict) or attempt.get("classification") not in BUG_ATTEMPT_CLASSIFICATIONS:
+        return False, "bug attempt has an invalid classification"
+    evidence = attempt.get("dynamic_evidence")
+    if not isinstance(evidence, dict) or set(evidence) != {"reproduction_result"}:
+        return False, "bug attempt lacks its reproduction result evidence"
+    path = _project_relative(project, evidence.get("reproduction_result"))
+    if path is None or not path.is_file() or "fm_agent_skill/probes" not in path.as_posix().replace("\\", "/"):
+        return False, "bug attempt references an invalid reproduction result path"
+    result = read_json(path, None)
+    if not isinstance(result, dict) or result.get("snapshot_commit") != snapshot_commit:
+        return False, "reproduction result is missing or belongs to another snapshot"
+    classification = attempt["classification"]
+    if classification == "inconclusive":
+        if result.get("classification") != "inconclusive" or result.get("state") not in {"completed", "unsupported"}:
+            return False, "inconclusive attempt lacks matching completed reproduction evidence"
+    elif result.get("state") != "completed" or result.get("classification") != classification:
+        return False, "bug attempt classification does not match its dynamic reproduction result"
+    return True, ""
+
+
+def bug_validation_ready(project: Path, candidate_ids: set[str]) -> tuple[bool, str]:
+    """Require dynamic evidence for every direct MISMATCH before phase success."""
+    root = fm_dir(project) / "bug_validation"
+    summary = read_json(root / "summary.json", None)
+    if not isinstance(summary, dict):
+        return False, "missing or invalid bug validation summary"
+    reports: dict[str, dict] = {}
+    for path in root.glob("*.result.json") if root.is_dir() else []:
+        report = read_json(path, None)
+        function_id = report.get("function_id") if isinstance(report, dict) else None
+        if not isinstance(function_id, str) or function_id in reports:
+            return False, "bug validation report has missing or duplicate function identity"
+        reports[function_id] = report
+    missing = candidate_ids - set(reports)
+    extra = set(reports) - candidate_ids
+    if missing or extra:
+        return False, "bug validation reports do not match current direct MISMATCH candidates"
+    snapshot = current_snapshot_commit(project)
+    if summary.get("snapshot_commit") != snapshot or summary.get("total_candidates") != len(candidate_ids):
+        return False, "bug validation summary does not match the current snapshot or candidate count"
+    counts = {"confirmed": 0, "rejected": 0, "inconclusive": 0}
+    for function_id, report in reports.items():
+        if report.get("snapshot_commit") != snapshot or report.get("confirmation_status") not in BUG_FINAL_STATUSES:
+            return False, f"bug validation report is invalid for {function_id}"
+        attempts = report.get("attempts")
+        if not isinstance(attempts, list) or not attempts:
+            return False, f"bug validation report has no attempts for {function_id}"
+        for attempt in attempts:
+            ok, reason = _dynamic_attempt_ready(project, attempt, snapshot)
+            if not ok:
+                return False, f"{function_id}: {reason}"
+        latest = attempts[-1].get("classification")
+        status = report["confirmation_status"]
+        if status == "confirmed" and latest != "confirmed":
+            return False, f"confirmed bug lacks confirmed dynamic evidence for {function_id}"
+        if status == "rejected" and latest != "not_reproduced":
+            return False, f"rejected bug lacks executed non-reproduction evidence for {function_id}"
+        if status == "inconclusive" and latest != "inconclusive":
+            return False, f"inconclusive bug has an incompatible final attempt for {function_id}"
+        counts[status] += 1
+    for status, count in counts.items():
+        if summary.get(f"total_{status}") != count:
+            return False, f"bug validation summary has an invalid {status} count"
     return True, ""
 
 

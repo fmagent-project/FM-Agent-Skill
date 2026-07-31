@@ -1,51 +1,80 @@
 # Bug validation
 
-Treat a reasoning mismatch as a candidate, not a confirmed defect. A Bug Validator
-report should retain the specification claim, observed behavior, code evidence,
-trigger condition, reproduction/probe, output, and confirmation state. Do not
-run destructive probes without the user's authorization. The diagnosis skill
-reports these fields faithfully and never upgrades an unconfirmed candidate.
+A direct reasoning `MISMATCH` is a candidate, never a confirmed defect. Do not
+read project tests or run the full test suite. Instead, reproduce the candidate
+through the production package's public entry point with one minimal generated
+probe. `DEPENDENCY_RISK` is not a bug candidate.
 
-Only a direct `MISMATCH` is a candidate. A `DEPENDENCY_RISK` result means the
-caller must be reconsidered in incremental selection but must not create a
-duplicate bug report. Before probing, the Coordinator runs `probe_runner.py
-detect`; it records a language/build profile at
-`fm_agent_skill/control/build_profile.json`. The recognized FM-Agent language
-set is C/C++, Python, Go, Rust, Java, JavaScript, TypeScript, CUDA, and ArkTS;
-Erlang is explicitly excluded.
+## Evidence levels
 
-Run every probe through `probe_runner.py run`. It creates an immutable
-`fm_agent_skill/probes/<bug-id>/attempt_<n>/` directory with its own
-`build_result.json`; never reuse a previous attempt, a project `build/`
-directory, or a `CMakeCache.txt`. The runner selects only a fixed safe adapter:
-CMake, Cargo, Go, Python syntax compilation, Java `javac`, JavaScript syntax
-checking, or TypeScript no-emit checking. CUDA and ArkTS require an explicitly
-approved toolchain adapter; without one they produce a completed unsupported
-probe that the worker records as `inconclusive`, not as a runtime failure.
-Workers never supply arbitrary shell commands.
+Code/spec reasoning creates the candidate. A build or syntax probe only checks
+that a snapshot is buildable; it is not behavioral evidence. Only an executed
+minimal probe whose actual output differs from the externally evidenced contract
+may produce `confirmed`.
 
-For an incremental run, consider only direct `MISMATCH` results whose
-`function_id` appears in that run's `incremental_decision.json.included` map.
-If candidates exist, replace `summary.json` with a new current-analysis summary
-is the current run; never reuse an earlier summary or probe as confirmation.
+Before the first candidate, run `probe_runner.py detect`; its profile at
+`fm_agent_skill/control/build_profile.json` selects an optional safe build
+adapter. It recognizes C/C++, Python, Go, Rust, Java, JavaScript, TypeScript,
+CUDA, and ArkTS; Erlang is excluded. Build adapters run only fixed commands and
+may not be mistaken for a reproduction.
 
-## Retry policy
+## Controlled dynamic reproduction
 
-Treat runtime failure separately from a negative finding. A host timeout, rate
-limit, tool crash, probe-build failure, or missing/invalid result is reported by
-the Coordinator as `execution`, `output`, or `interrupted` and is retried up to
-`bug_validation_max_attempts` (default: five runtime attempts). Do not convert
-those failures into a rejected candidate.
+For each candidate and attempt:
 
-A completed probe with `not_reproduced`, `rejected`, or `inconclusive` is a
-negative validation result. Repeat it under the same job ID until it has made
-`bug_validation_negative_retries + 1` completed negative attempts (default:
-three probes: the first plus two repeats). Vary only the permitted trigger or
-probe parameters; preserve the same source snapshot and candidate identity.
-Stop immediately on `confirmed`. On exhaustion, use `rejected` only where the
-candidate was actually tested and not reproduced; retain `inconclusive` when
-evidence remains insufficient.
+1. Start the same `bug_validate` job and invoke `fm-bug-validate-worker` in its
+   preparation pass. It writes `reproduction.json` and `probe.<ext>` under its
+   assigned `fm_agent_skill/probes/<bug-id>/attempt_<n>/` directory.
+2. Validate that the contract names the current snapshot, a public entry point,
+   a fixed language extension, no shell command, and fixed `CONFIRMED` /
+   `NOT CONFIRMED` markers. Run the optional `probe_runner.py run` build check.
+3. The Coordinator, not a worker, runs:
 
-The assigned result JSON must retain an `attempts` array. Each entry records its
-ordinal, classification, trigger/probe, output, and timestamp, so a later probe
-never overwrites earlier evidence.
+   ```bash
+   <python3> "$FM_AGENT_SKILL_ROOT/scripts/reproduction_runner.py" run \
+     --project "$PROJECT" --bug-id "$BUG_ID" --attempt "$JOB_ATTEMPT"
+   ```
+
+4. If the runner returns `execution_error`, call `scheduler.py fail` with
+   `execution` and requeue the same job. Do not write a semantic result.
+5. Otherwise invoke the same worker in its finalization pass with the immutable
+   `reproduction_result.json`, then call `scheduler.py complete` with the
+   matching classification.
+
+The runner accepts no Agent-provided command. It can dynamically execute Python,
+JavaScript, and Go probes using fixed command templates. For C/C++, Rust, Java,
+TypeScript, CUDA, and ArkTS it writes a completed `unsupported` result and the
+worker reports `inconclusive` until a dedicated approved adapter exists. This is
+intentional: do not substitute a guessed shell command.
+
+The probe must be self-contained, avoid network access and unrelated file I/O,
+use a public entry point rather than an internal module, catch errors, and print
+one unambiguous marker. `reproduction_result.json` retains its command, exit
+code, stdout, stderr, source snapshot, and classification.
+
+## Classification and retry
+
+| Dynamic runner result | Worker receipt | Final report status |
+| --- | --- | --- |
+| completed `CONFIRMED` | `confirmed` | `confirmed`; stop |
+| completed `NOT CONFIRMED` | `not_reproduced` | `inconclusive` until the last negative attempt, then `rejected` |
+| completed unsupported/ambiguous output | `inconclusive` | `inconclusive` |
+| timeout, command/tool failure, missing result | no receipt | retryable runtime failure |
+
+Runtime failure retries up to `bug_validation_max_attempts` (default five).
+A completed `not_reproduced` or `inconclusive` attempt repeats under the same
+job ID until `bug_validation_negative_retries + 1` attempts (default three),
+preserving every immutable attempt. Vary only legal inputs or trigger conditions;
+keep the candidate identity and source snapshot fixed. A build failure is runtime
+probe evidence only; it cannot reject or confirm a semantic candidate.
+
+For incremental analysis, consider only direct `MISMATCH` results whose
+`function_id` is in `incremental_decision.json.included`. Replace the current
+Coordinator-authored `summary.json` with the current snapshot commit and exact
+candidate/confirmed/rejected/inconclusive counts; never reuse older reports or
+probes as current confirmation:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/bug_summary.py" \
+  --project "$PROJECT" --mode "$MODE"
+```

@@ -21,8 +21,8 @@ no-op detection, and explicit safe resume of interrupted analyses.
   call-graph artifacts.
 - Compare implementations with specifications, distinguishing direct violations
   (`MISMATCH`) from propagated dependency risks (`DEPENDENCY_RISK`).
-- Build isolated reproductions for eligible direct violations and report
-  confirmed defects.
+- Build controlled isolated reproductions for eligible direct violations and
+  report a confirmed defect only after actual dynamic evidence.
 - Run a full analysis when no usable baseline exists.
 - Run an incremental analysis automatically when the current Git snapshot
   differs from a valid baseline commit.
@@ -124,12 +124,15 @@ valid `ERROR` result rather than a scheduling retry. Bug Validator retries
 runtime failures up to five attempts and repeats a completed negative result
 twice by default, preserving all three probes.
 
-Bug probes use a language/build-neutral runner rather than a CMake-only path.
-It recognizes the original FM-Agent source set except Erlang: C/C++, Python,
-Go, Rust, Java, JavaScript, TypeScript, CUDA, and ArkTS. Each probe attempt
-gets its own `fm_agent_skill/probes/<bug-id>/attempt_<n>/` directory and a
-recorded safe adapter; unsupported toolchains become `inconclusive` rather than
-executing an Agent-provided shell command.
+Bug validation has two deliberately separate surfaces. `probe_runner.py` is a
+language/build-neutral build or syntax check and is never behavioral proof.
+The Bug Validator first designs a public-entrypoint probe; the Coordinator then
+executes it through `reproduction_runner.py`, whose command is fixed by the
+approved language adapter. Only its persisted runtime output may confirm a
+candidate. C/C++, Python, Go, Rust, Java, JavaScript, TypeScript, CUDA, and
+ArkTS are recognized (Erlang is excluded); dynamic execution is currently
+approved for Python, JavaScript, and Go. Other languages are retained as
+`inconclusive` rather than executing an Agent-provided shell command.
 
 `input`, `semantic`, and `cancelled` failures are terminal. They leave
 dependents unscheduled and fail the current phase without discarding valid,
@@ -361,7 +364,7 @@ domain context 每次失败后等待 10 秒；spec 阶段若已得到部分有�
 无任何进展才等待 10 秒。有效 sidecar 会保留。
 
 验证推理本身失败时应写出有效的 `ERROR` result，而不是重复调度；只有 Agent 或结果产物失败才
-重试。Bug Validator 的运行或产物失败最多尝试 5 次；正常完成但未复现或证据不足时会在同一 job 内额外复测 2 次，并保留全部 probe 证据。`input`、`semantic` 和 `cancelled` 是终止失败：下游
+重试。Bug Validator 先设计公共入口 probe，再由 Coordinator 通过固定动态运行器实际执行；构建或语法检查不能确认缺陷。运行或产物失败最多尝试 5 次；正常完成但未复现或证据不足时会在同一 job 内额外复测 2 次，并保留全部 probe 证据。`input`、`semantic` 和 `cancelled` 是终止失败：下游
 不会启动，当前阶段失败，但已有独立有效产物会保留。resume 前会先回收遗留 `running` job：产物有效
 则直接成功，否则在次数未耗尽时原地转为 `retryable`。
 

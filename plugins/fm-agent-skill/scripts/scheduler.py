@@ -96,7 +96,9 @@ def _validate_report(job, result):
     if "outputs" in result and (not isinstance(result["outputs"], list) or not all(isinstance(item, str) for item in result["outputs"])): return "worker report outputs must be a string array"
     if "verdict" in result and result["verdict"] not in state.VERDICTS: return "worker report has invalid verdict"
     if "summary" in result and (not isinstance(result["summary"], str) or len(result["summary"]) > 500): return "worker report summary must be at most 500 characters"
-    if job["type"] == "bug_validate" and result.get("classification") not in BUG_CLASSIFICATIONS: return "Bug Validator report requires a valid classification"
+    if job["type"] == "bug_validate":
+        allowed = state.BUG_ATTEMPT_CLASSIFICATIONS if not job.get("legacy_contract") else BUG_CLASSIFICATIONS
+        if result.get("classification") not in allowed: return "Bug Validator report requires a valid classification"
     if job["type"] == "incremental_spec_plan":
         expected = f"fm_agent_skill/worker_reports/{job['id']}.json"
         if result.get("plan_path") != expected: return "incremental plan report must name its assigned plan_path"
@@ -133,10 +135,19 @@ def _validate(target, job, result=None):
         attempts = report.get("attempts") if isinstance(report, dict) else None
         index = int(job.get("negative_attempt_index", 1))
         if not isinstance(attempts, list) or len(attempts) < index: return "Bug Validator result must append the current probe to attempts"
+        if report.get("snapshot_commit") != state.current_snapshot_commit(target): return "Bug Validator report snapshot does not match current analysis worktree"
+        if report.get("confirmation_status") not in state.BUG_FINAL_STATUSES: return "Bug Validator report has invalid confirmation status"
+        latest = attempts[-1] if attempts else None
+        dynamic_ok, dynamic_reason = state._dynamic_attempt_ready(target, latest, state.current_snapshot_commit(target))
+        if not dynamic_ok: return f"Bug Validator current attempt lacks valid dynamic evidence: {dynamic_reason}"
         if result is not None:
-            latest = attempts[-1]
-            if not isinstance(latest, dict) or latest.get("classification") != result.get("classification"):
+            if latest.get("classification") != result.get("classification"):
                 return "Bug Validator result attempt classification does not match its receipt"
+            status = report.get("confirmation_status")
+            classification = result.get("classification")
+            if classification == "confirmed" and status != "confirmed": return "confirmed receipt requires a confirmed report"
+            if classification == "inconclusive" and status != "inconclusive": return "inconclusive receipt requires an inconclusive report"
+            if classification == "not_reproduced" and status not in {"inconclusive", "rejected"}: return "non-reproduction receipt requires inconclusive or rejected report"
     return None
 def _fail(job, kind, message):
     if kind not in FAILURE_CLASSES: raise ValueError("unsupported failure class")

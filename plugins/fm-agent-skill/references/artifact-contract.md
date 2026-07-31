@@ -32,8 +32,8 @@ All mutable Skill state lives under `fm_agent_skill/`.
   external evidence.
   Dependency risk records affected callers but is not a direct bug candidate.
 - `fm_agent/bug_validation/` is generated only when a direct `MISMATCH` is
-  probed. Confirmed candidates have a detail Markdown file, result JSON, and
-  summary; a clean run need not create this directory.
+  dynamically probed. Every current candidate has a detail Markdown file,
+  result JSON, and summary; a clean run need not create this directory.
 - `fm_agent/version.log`, written after a successful baseline, records the
   commit held by `refs/fm-agent-skill/baseline` for FM-Agent-compatible
   provenance.
@@ -84,16 +84,31 @@ independently established local violation. `INCONCLUSIVE` records that the
 available contract is implementation-derived/low-confidence and cannot prove a
 match. Identity and snapshot commit must match the current analysis worktree.
 
-Finding/bug result records function identity, spec claim, implementation
-evidence, trigger/probe, output, and status `candidate`, `confirmed`,
-`rejected`, or `error`. Its `attempts` array retains every Bug Validator probe
-with ordinal, classification, trigger/probe, output, and timestamp; an
-unreproduced candidate becomes final only after the configured negative probes.
-`summary.json` counts each status.
+Finding/bug result records at least `{function_id, snapshot_commit,
+confirmation_status, attempts}` plus the specification claim, implementation
+evidence, trigger, probe, and output. `confirmation_status` is `confirmed`,
+`rejected`, or `inconclusive`; it is never inferred from a build result. Each
+attempt has `{ordinal, classification, trigger, probe, output,
+dynamic_evidence, timestamp}` where classification is `confirmed`,
+`not_reproduced`, or `inconclusive` and `dynamic_evidence` is exactly
+`{"reproduction_result":"fm_agent_skill/probes/.../reproduction_result.json"}`.
+The referred result belongs to the same snapshot and its completed
+classification must match. A report can be confirmed only by `CONFIRMED` runtime
+evidence; it can be rejected only by executed `NOT CONFIRMED` evidence after the
+configured negative attempts. `summary.json` is Coordinator-authored and has
+at least `{snapshot_commit, total_candidates, total_confirmed, total_rejected,
+total_inconclusive}`; its counts must equal the current result files.
 
 Every new Bug Validator job assigns exactly one
 `fm_agent/bug_validation/*.result.json` output. Its current receipt
 classification must equal the classification in the last appended attempt.
+
+`fm_agent_skill/probes/<bug-id>/attempt_<n>/` is immutable and contains the
+worker-authored `reproduction.json`, `probe.<ext>`, optional `build_result.json`,
+and Coordinator-authored `reproduction_result.json`. The reproduction contract
+has an approved language adapter, public-entrypoint explanation, fixed markers,
+current snapshot commit, and no shell command. Only `reproduction_runner.py`
+executes it using a fixed adapter command.
 
 `fm_agent_skill/active.json` is the sole current-analysis record. It contains
 mode, phase status, inputs, fingerprint, timestamps, an immutable

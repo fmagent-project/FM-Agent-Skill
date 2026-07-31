@@ -11,18 +11,14 @@ from _common import project, state
 def json_object(path): return isinstance(state.read_json(path, None), dict)
 
 
-def has_direct_mismatch(target, mode):
+def direct_mismatch_ids(target, mode):
     selected = None
     if mode == "incremental":
         decision = state.read_json(state.control_dir(target) / "incremental_decision.json", {})
-        if not isinstance(decision.get("included"), dict): return False
-        selected = set(decision["included"])
-    results = state.fm_dir(target) / "logic_verification_results"
-    for path in results.rglob("*.json") if results.is_dir() else []:
-        result = state.read_json(path, {})
-        if result.get("verdict") == "MISMATCH" and (selected is None or result.get("function_id") in selected):
-            return True
-    return False
+        included = decision.get("included") if isinstance(decision, dict) else None
+        if not isinstance(included, dict): return set()
+        selected = set(included)
+    return state.direct_mismatch_ids(target, selected)
 
 
 def selected_functions(target):
@@ -43,9 +39,9 @@ def baseline_ready(target, submodules):
     return isinstance(fingerprint, str) and state.inspect_baseline(target, fingerprint, submodules).get("valid", False)
 
 
-def bug_summary_current(target):
-    summary = state.read_json(state.fm_dir(target) / "bug_validation" / "summary.json", {})
-    return isinstance(summary, dict)
+def bug_validation_current(target, mode):
+    candidates = direct_mismatch_ids(target, mode)
+    return state.bug_validation_ready(target, candidates)
 
 
 def call_graph_ready(target):
@@ -68,7 +64,7 @@ def validate(target, mode, phase, submodules):
         "call_graph": lambda: call_graph_ready(target),
         "specification": lambda: state.specification_context_ready(target)[0] and state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
         "verification": lambda: state.function_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
-        "bug_validation": lambda: (not has_direct_mismatch(target, mode)) or bug_summary_current(target),
+        "bug_validation": lambda: (not direct_mismatch_ids(target, mode)) or bug_validation_current(target, mode)[0],
         "finalize": lambda: True,
         "validate_baseline": lambda: baseline_ready(target, submodules),
         "refresh_plan": lambda: state.phases_schema_ready(target)[0],

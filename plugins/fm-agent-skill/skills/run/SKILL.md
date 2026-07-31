@@ -263,9 +263,10 @@ class; if its status is `retryable`, wait 10 seconds and call
 batches immediately; wait 10 seconds only when it made no progress. A retried
 spec batch preserves valid paired sidecars and repairs only incomplete assigned
 artifacts. A verification-level failure is a valid `ERROR` result, not a retry;
-retry only when the Agent or result artifact itself failed. Bug Validator runtime
-failures retry up to five attempts by default. A completed `not_reproduced`,
-`rejected`, or `inconclusive` Bug Validator result is not a runtime failure:
+retry only when the Agent or result artifact itself failed. A Bug Validator job
+uses a preparation pass, a Coordinator-owned dynamic runner, then a
+finalization pass. Its runtime failures retry up to five attempts by default. A
+completed `not_reproduced` or `inconclusive` result is not a runtime failure:
 requeue its same job immediately until it has three completed negative probes
 by default, preserving each probe in the result's `attempts` array. A
 `confirmed` result finishes immediately. Every new Bug Validator job must
@@ -333,18 +334,35 @@ first direct candidate, detect and record the safe build adapter:
 
 For every launch of a Bug Validator job, pass its current overall job attempt
 as `--attempt`; this makes a retry immutable even when it is retrying the same
-negative validation index:
+negative validation index. First invoke the worker's preparation pass, validate
+its `reproduction.json` and `probe.<ext>`, then optionally collect build
+evidence:
 
 ```bash
 <python3> "$FM_AGENT_SKILL_ROOT/scripts/probe_runner.py" run \
   --project "$PROJECT" --bug-id "$BUG_ID" --attempt "$JOB_ATTEMPT"
 ```
 
-Read its `build_result.json` and classify a completed unsupported adapter as
-`inconclusive`. A nonzero adapter command is probe evidence for the worker to
-interpret; only failure to run the runner or write its result is a scheduler
-runtime failure. Do not pass arbitrary commands to the runner. Read
-[bug-validation.md](../../references/bug-validation.md) for adapter coverage.
+Then execute the worker-designed probe only through the fixed dynamic runner:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/reproduction_runner.py" run \
+  --project "$PROJECT" --bug-id "$BUG_ID" --attempt "$JOB_ATTEMPT"
+```
+
+If that runner reports `execution_error`, fail the job as `execution`; do not
+ask the worker for a semantic result. Otherwise invoke its finalization pass
+with the immutable `reproduction_result.json`, then complete the job using that
+same classification. `build_result.json` can never confirm or reject a defect.
+Do not pass arbitrary commands to either runner. Read
+[bug-validation.md](../../references/bug-validation.md) for the full contract.
+After every current candidate has a terminal report, write the Coordinator-owned
+summary before the phase gate:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/bug_summary.py" \
+  --project "$PROJECT" --mode "$MODE"
+```
 
 Only after every phase gate succeeds may the agent call `pipeline.py complete`
 and release the lock as `idle`. Never modify business source or extracted
