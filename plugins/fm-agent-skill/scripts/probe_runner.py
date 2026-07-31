@@ -9,23 +9,23 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 
 from _common import project, state
-from fm_agent_core.languages import PROFILES
+from fm_agent_core.languages import PROFILES, probe_adapter_choices
+from sandbox import AdapterUnavailable, sandbox_command, sandbox_metadata
 
 
 # Derived from the central registry; do not add extension maps in this runner.
 LANGUAGE_EXTENSIONS = {
     profile.key: set(profile.extensions) for profile in PROFILES
-    if profile.support_level != "external-plugin"
+    if profile.support_level in {"full", "static_only"}
 }
 IGNORED_DIRS = {".git", ".codegraph", "fm_agent", "fm_agent_skill", "node_modules", "build", "target", "dist", "out", "__pycache__"}
-ADAPTERS = {"auto", "cmake", "cargo", "go", "python", "java", "javascript", "typescript", "cuda", "arkts", "none"}
+ADAPTERS = frozenset(probe_adapter_choices())
 
 
 def safe_component(value: str) -> str:
@@ -53,70 +53,73 @@ def languages(target: Path) -> list[str]:
     return sorted(language for language, extensions in LANGUAGE_EXTENSIONS.items() if any(path.suffix.lower() in extensions for path in files))
 
 
+def _detectors_present(target: Path, language) -> bool:
+    return not language.requires_build_metadata or all((target / item).is_file() for item in language.build_detectors)
+
+
 def auto_adapter(target: Path, language_keys: list[str]) -> tuple[str, str | None]:
-    if (target / "CMakeLists.txt").is_file(): return "cmake", None
-    if (target / "Cargo.toml").is_file(): return "cargo", None
-    if (target / "go.mod").is_file(): return "go", None
-    if "typescript" in language_keys and (target / "tsconfig.json").is_file(): return "typescript", None
-    for name, adapter in (("python", "python"), ("java", "java"), ("javascript", "javascript"), ("cuda", "cuda"), ("arkts", "arkts")):
-        if name in language_keys: return adapter, None
+    for language in PROFILES:
+        if language.key in language_keys and language.build_adapter and _detectors_present(target, language):
+            return language.build_adapter, None
     return "none", "no supported FM-Agent language was found"
 
 
 def profile(target: Path, requested: str) -> dict:
     language_keys = languages(target)
     adapter, reason = auto_adapter(target, language_keys) if requested == "auto" else (requested, None)
-    supported = adapter in {"cmake", "cargo", "go", "python", "java", "javascript", "typescript"}
-    if adapter == "cmake" and not (target / "CMakeLists.txt").is_file(): reason, supported = "CMakeLists.txt is missing", False
-    if adapter == "cargo" and not (target / "Cargo.toml").is_file(): reason, supported = "Cargo.toml is missing", False
-    if adapter == "cargo" and not (target / "Cargo.lock").is_file(): reason, supported = "Cargo.lock is required for an offline frozen probe", False
-    if adapter == "go" and not (target / "go.mod").is_file(): reason, supported = "go.mod is missing", False
-    if adapter == "typescript" and not (target / "tsconfig.json").is_file(): reason, supported = "tsconfig.json is missing", False
-    if adapter == "java" and "java" not in language_keys: reason, supported = "no Java source was found", False
-    if adapter == "python" and "python" not in language_keys: reason, supported = "no Python source was found", False
-    if adapter == "javascript" and "javascript" not in language_keys: reason, supported = "no JavaScript source was found", False
-    if adapter == "cuda": reason, supported = "CUDA requires an explicitly approved toolchain adapter", False
-    if adapter == "arkts": reason, supported = "ArkTS requires an explicitly approved toolchain adapter", False
+    candidates = [item for item in PROFILES if item.key in language_keys and item.build_adapter == adapter]
+    supported = bool(candidates) and adapter != "none"
+    if not candidates and adapter != "none":
+        reason = reason or f"no detected language profile owns build adapter {adapter}"
+    elif candidates and not any(_detectors_present(target, item) for item in candidates):
+        required = sorted({name for item in candidates for name in item.build_detectors})
+        reason, supported = f"required project metadata is missing: {', '.join(required)}", False
     if adapter == "none": supported = False
-    excluded = [profile.key for profile in PROFILES if profile.support_level == "external-plugin"]
+    excluded = [profile.key for profile in PROFILES if profile.support_level == "capability_plugin"]
     return {"schema_version": 2, "project": str(target), "languages": language_keys, "excluded_languages": excluded, "adapter": adapter, "supported": supported, "reason": reason, "generated_at": state.now()}
 
 
-def run_command(command: list[str], cwd: Path, env: dict[str, str], timeout: int) -> dict:
+def run_command(target: Path, scratch: Path, command: list[str], env: dict[str, str], timeout: int) -> dict:
+    """Run a fixed build argv in the same fail-closed sandbox as probes."""
     try:
-        completed = subprocess.run(command, cwd=cwd, text=True, capture_output=True, timeout=timeout, env=env)
-        return {"command": command, "returncode": completed.returncode, "stdout": completed.stdout[-8000:], "stderr": completed.stderr[-8000:]}
+        sandboxed = sandbox_command(target, scratch, command, env)
+        completed = subprocess.run(sandboxed, cwd=target, text=True, capture_output=True, timeout=timeout, env={})
+        return {"state": "completed", "command": command, "sandbox": sandbox_metadata(), "returncode": completed.returncode, "stdout": completed.stdout[-8000:], "stderr": completed.stderr[-8000:]}
+    except AdapterUnavailable as exc:
+        return {"state": "unsupported", "command": command, "sandbox": sandbox_metadata(), "returncode": None, "stdout": "", "stderr": str(exc)}
     except FileNotFoundError as exc:
-        return {"command": command, "returncode": 127, "stdout": "", "stderr": f"required command is unavailable: {exc}"}
+        return {"state": "execution_error", "command": command, "returncode": 127, "stdout": "", "stderr": f"required command is unavailable: {exc}"}
     except subprocess.TimeoutExpired as exc:
-        return {"command": command, "returncode": 124, "stdout": (exc.stdout or "")[-8000:], "stderr": (exc.stderr or "")[-8000:] + "\nprobe command timed out"}
+        return {"state": "execution_error", "command": command, "returncode": 124, "stdout": (exc.stdout or "")[-8000:], "stderr": (exc.stderr or "")[-8000:] + "\nprobe command timed out"}
 
 
 def adapter_commands(target: Path, adapter: str, attempt: Path, cmake_target: str | None) -> tuple[list[tuple[list[str], Path, dict[str, str]]], str | None]:
-    env = dict(os.environ)
+    env: dict[str, str] = {}
     if adapter == "cmake":
-        build = attempt / "build"
-        commands = [(["cmake", "-S", str(target), "-B", str(build)], target, env), (["cmake", "--build", str(build)] + (["--target", cmake_target] if cmake_target else []), target, env)]
+        commands = [(["cmake", "-S", "/project", "-B", "/tmp/build"], target, env), (["cmake", "--build", "/tmp/build"] + (["--target", cmake_target] if cmake_target else []), target, env)]
         return commands, None
     if adapter == "cargo":
-        env["CARGO_TARGET_DIR"] = str(attempt / "target")
+        env.update({"CARGO_HOME": "/tmp/cargo-home", "CARGO_TARGET_DIR": "/tmp/cargo-target", "CARGO_NET_OFFLINE": "true"})
         return [(["cargo", "build", "--frozen"], target, env)], None
     if adapter == "go":
-        env.update({"GOCACHE": str(attempt / "go-cache"), "GOMODCACHE": str(attempt / "go-mod-cache"), "GOPROXY": "off"})
+        env.update({"GOCACHE": "/tmp/go-cache", "GOMODCACHE": "/tmp/go-mod-cache", "GOPROXY": "off"})
         return [(["go", "build", "./..."], target, env)], None
     if adapter == "python":
         script = "import pathlib,sys; root=pathlib.Path(sys.argv[1]); files=sys.argv[2:]; [compile((root / item).read_text(encoding='utf-8'), item, 'exec') for item in files]"
         files = [path.relative_to(target).as_posix() for path in source_files(target) if path.suffix.lower() == ".py"]
-        return [([sys.executable, "-c", script, str(target), *files], attempt, env)], None
+        env.update({"PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"})
+        return [([sys.executable, "-c", script, "/project", *files], attempt, env)], None
     if adapter == "java":
-        classes, source_list = attempt / "classes", attempt / "java_sources.txt"
+        # Only this Coordinator-owned build scratch is bound as /tmp.  Keep the
+        # generated source list there rather than exposing the attempt root.
+        classes, source_list = attempt / "build-sandbox" / "classes", attempt / "build-sandbox" / "java_sources.txt"
         classes.mkdir(parents=True, exist_ok=True)
-        source_list.write_text("\n".join(str(path) for path in source_files(target) if path.suffix.lower() == ".java") + "\n", encoding="utf-8")
-        return [(["javac", "-d", str(classes), f"@{source_list}"], attempt, env)], None
+        source_list.write_text("\n".join("/project/" + path.relative_to(target).as_posix() for path in source_files(target) if path.suffix.lower() == ".java") + "\n", encoding="utf-8")
+        return [(["javac", "-d", "/tmp/classes", "@/tmp/java_sources.txt"], attempt, env)], None
     if adapter == "javascript":
-        commands = [(["node", "--check", str(path)], attempt, env) for path in source_files(target) if path.suffix.lower() in {".js", ".jsx"}]
+        commands = [(["node", "--check", "/project/" + path.relative_to(target).as_posix()], attempt, env) for path in source_files(target) if path.suffix.lower() in {".js", ".jsx"}]
         return commands, None
-    if adapter == "typescript": return [(["tsc", "--noEmit", "--project", str(target / "tsconfig.json")], target, env)], None
+    if adapter == "typescript": return [(["tsc", "--noEmit", "--project", "/project/tsconfig.json"], target, env)], None
     return [], "adapter has no safe built-in command"
 
 
@@ -128,7 +131,9 @@ def configured_adapter(target: Path, requested: str | None) -> str:
     if requested is not None: return requested
     config = state.read_json(state.skill_dir(target) / "config.json", {})
     value = config.get("probe_adapter", "auto") if isinstance(config, dict) else "auto"
-    return value if value in ADAPTERS else "auto"
+    if value not in ADAPTERS:
+        raise ValueError(f"configured probe_adapter is unsupported by the LanguageProfile registry: {value}")
+    return value
 
 
 def run_probe(target: Path, bug_id: str, attempt_number: int, requested: str, timeout: int, cmake_target: str | None) -> dict:
@@ -150,9 +155,13 @@ def run_probe(target: Path, bug_id: str, attempt_number: int, requested: str, ti
         if reason:
             result.update({"state": "unsupported", "ok": False, "reason": reason})
         else:
-            result["commands"] = [run_command(command, cwd, env, timeout) for command, cwd, env in commands]
-            result["ok"] = bool(result["commands"]) and all(item["returncode"] == 0 for item in result["commands"])
-            result["state"] = "completed"
+            scratch = attempt / "build-sandbox"
+            result["commands"] = [run_command(target, scratch, command, env, timeout) for command, _cwd, env in commands]
+            unsupported = [item for item in result["commands"] if item["state"] == "unsupported"]
+            result["ok"] = bool(result["commands"]) and all(item["state"] == "completed" and item["returncode"] == 0 for item in result["commands"])
+            result["state"] = "unsupported" if unsupported else "completed"
+            if unsupported:
+                result["reason"] = unsupported[0]["stderr"]
     result["ended_at"] = state.now(); state.atomic_json(attempt / "build_result.json", result)
     return result
 

@@ -124,6 +124,12 @@ def extract(target: Path, submodules: list[str], codegraph_export: Path | None =
             destination.write_text("".join(lines[start - 1:end]), encoding="utf-8")
             suffix = f"#{occurrences[name]}" if counts[name] > 1 else ""
             manifest.append({"artifact": artifact.as_posix(), "source_path": rel, "name": name, "function_id": f"{rel}::{name}{suffix}", "line_start": start, "line_end": end, "extraction_backend": origin})
+    unavailable = sorted(rel for rel, origin in provenance.items() if origin == "tree-sitter-unavailable")
+    if unavailable:
+        raise ValueError(
+            "Tree-sitter is required for source files without CodeGraph spans; "
+            f"install the declared grammar or provide a CodeGraph export (for example: {unavailable[0]})"
+        )
     state.atomic_json(state.fm_dir(target) / "extraction_manifest.json", {"schema_version": 1, "generated_at": state.now(), "functions": manifest})
     state.atomic_json(state.fm_dir(target) / "fm_agent_file_list.json", sorted(item["artifact"] for item in manifest))
     index = build_index(target, submodules)

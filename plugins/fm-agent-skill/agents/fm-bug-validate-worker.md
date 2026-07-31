@@ -27,12 +27,17 @@ fm_agent_skill/probes/<bug-id>/attempt_<n>/
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "bug_id": "...",
   "attempt": 1,
   "snapshot_commit": "...",
-  "language": "c|cpp|python|go|rust|java|javascript|typescript|cuda|arkts",
-  "public_entrypoint": "public API and why it reaches the candidate",
+  "language": "one canonical LanguageProfile key assigned in the job manifest",
+  "public_entrypoint": {
+    "ecosystem": "language-profile dynamic adapter, or unavailable",
+    "kind": "package|module|export|crate|command",
+    "target": "repository-relative public package/module path or .",
+    "symbol": "public callable/export name"
+  },
   "probe_file": "probe.<ext>",
   "expected_marker": "CONFIRMED",
   "not_confirmed_marker": "NOT CONFIRMED",
@@ -40,19 +45,23 @@ fm_agent_skill/probes/<bug-id>/attempt_<n>/
 }
 ```
 
-Use the fixed extension from the assigned language profile. The probe must be
-self-contained, make no network call, avoid arbitrary file I/O, call only
-through the public entry point, catch runtime errors, and print exactly one
-first-line marker:
+Use the fixed extension and dynamic-adapter name from the assigned language
+profile. `target` must be repository-relative, never an absolute path or `..`;
+do not use an internal implementation file. For a profile with no approved
+dynamic adapter, set `ecosystem` to `unavailable` and still provide the public
+entry metadata so finalization can record an honest `inconclusive` result. The
+probe must be self-contained, make no network call, avoid arbitrary file I/O,
+call only through the public entry point, catch runtime errors, and print
+exactly one first-line marker:
 `CONFIRMED` when actual behavior differs from the externally evidenced contract,
 or `NOT CONFIRMED` when it does not. Do not run it yourself and do not put a
 shell command in the contract.
 
-The runner exposes a read-only project root as `FM_AGENT_PROJECT_ROOT`. For
-Node/TypeScript, load the package root through
-`process.env.FM_AGENT_PUBLIC_ENTRY` rather than `require('.')`: the probe is
-stored below `fm_agent_skill/probes/`, so relative module resolution is not the
-project public entry point. For Rust, use the public crate name exposed as
+The runner exposes a read-only project root as `FM_AGENT_PROJECT_ROOT` and the
+validated target as `FM_AGENT_PUBLIC_ENTRY`. For Node/TypeScript, load that
+value rather than `require('.')`: the probe is stored below
+`fm_agent_skill/probes/`, so relative module resolution is not the project
+public entry point. For Rust, use the public crate name exposed as
 `FM_AGENT_RUST_CRATE`. Do not substitute an internal source-file import.
 
 Return a compact preparation receipt. The Coordinator validates the contract,

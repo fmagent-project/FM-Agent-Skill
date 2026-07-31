@@ -23,10 +23,13 @@ through `max_active_subagents`, `spec_concurrency`, `verify_concurrency`,
 `2` additional completed negative probes. These scheduling and retry
 limits are operational only and are excluded from the analysis fingerprint.
 
-`probe_adapter` defaults to `auto`. It may select only `cmake`, `cargo`, `go`,
-`python`, `java`, `javascript`, `typescript`, `cuda`, `arkts`, or `none`; it
-does not accept a shell command. Automatic selection records the chosen adapter
-and the recognized source languages in `fm_agent_skill/control/build_profile.json`.
+`probe_adapter` defaults to `auto`. Its accepted values are derived only from
+the LanguageProfile registry's non-null `build_adapter` values, plus `auto` and
+`none`; it does not accept a shell command. Capability plugins such as CUDA and
+ArkTS have no generic build adapter and cannot be selected here. A saved value
+that is no longer in the registry is rejected; it is never silently changed to
+`auto`. Automatic selection records the chosen adapter and the recognized
+source languages in `fm_agent_skill/control/build_profile.json`.
 
 Every analysis creates one detached Git worktree from a private snapshot
 commit. The snapshot captures tracked and non-ignored working-tree changes

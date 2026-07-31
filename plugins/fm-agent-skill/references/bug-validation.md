@@ -15,9 +15,23 @@ may produce `confirmed`.
 Before the first candidate, run `probe_runner.py detect`; its profile at
 `fm_agent_skill/control/build_profile.json` selects an optional safe build
 adapter. Language capabilities are defined once in
-`src/fm_agent_core/languages.py`: CodeGraph names, Tree-sitter grammar names,
-file extensions, build ecosystems, runtime ecosystems, and support level must
-all come from that registry. Erlang remains an explicit ELP capability plugin.
+`src/fm_agent_core/languages.py`: canonical names, file extensions, CodeGraph
+names, Tree-sitter grammar names, span extractor, public-entry strategy, build
+metadata detector, build adapter, dynamic adapter, and support level must all
+come from that registry. Do not add a parallel extension or ecosystem map in a
+runner. `full` profiles currently mean Python, JavaScript, TypeScript, Go and
+Rust; Java and C/C++ are `static_only` until their dynamic adapters exist;
+CUDA, ArkTS and Erlang are independent `capability_plugin` profiles.
+
+For static extraction, CodeGraph spans are authoritative. Without a matching
+CodeGraph span, use the declared Tree-sitter grammar; Python may use its native
+AST and C/C++ may use their profile-declared Clang AST when that grammar is
+unavailable. There is no regular-expression boundary fallback.
+
+For JavaScript and TypeScript, Tree-sitter extraction includes named arrow
+functions declared through a `variable_declarator`, such as
+`export const parse = (input) => { ... }`. The emitted span covers its owning
+single declaration (including `const`/`export`) and is keyed by `parse`.
 Build adapters run only fixed commands and may not be mistaken for a
 reproduction.
 
@@ -28,9 +42,14 @@ For each candidate and attempt:
 1. Start the same `bug_validate` job and invoke `fm-bug-validate-worker` in its
    preparation pass. It writes `reproduction.json` and `probe.<ext>` under its
    assigned `fm_agent_skill/probes/<bug-id>/attempt_<n>/` directory.
-2. Validate that the contract names the current snapshot, a public entry point,
+2. Validate that the contract names the current snapshot, a structured public
+   entry point (`ecosystem`, `kind`, repository-relative `target`, `symbol`),
    a fixed language extension, no shell command, and fixed `CONFIRMED` /
-   `NOT CONFIRMED` markers. Run the optional `probe_runner.py run` build check.
+   `NOT CONFIRMED` markers. Its ecosystem must equal the profile's dynamic
+   adapter, or `unavailable` for a static-only/capability profile. Run the
+   optional `probe_runner.py run` build check.
+   It uses the same Bubblewrap policy as dynamic reproduction; it never runs a
+   project build directly on the host.
 3. The Coordinator, not a worker, runs:
 
    ```bash
@@ -50,17 +69,18 @@ current overall job attempt and must point at that exact attempt's
 probe; the host state machine requests finalization again until the current
 dynamic evidence is appended.
 
-The runner accepts no Agent-provided command. It executes only an approved
+The runners accept no Agent-provided command. They execute only an approved
 ecosystem adapter inside Bubblewrap with a read-only project mount, private
-temporary directory, timeout, disabled network, cleared environment, and no
-mount of `/`, `/home`, or host configuration directories. Runtime binaries must
-be provisioned under an approved system/runtime prefix; a runtime under a user
-home directory is `unsupported`, rather than making that home visible. Python,
-JavaScript, Go, and Cargo/Rust have Coordinator-owned adapters; TypeScript needs
-the approved `tsx` runtime. Java (Maven/Gradle), C/C++ (CMake), CUDA, ArkTS and
-ELP remain intentionally `unsupported` until their dedicated adapter validates
-its project metadata and public entrypoint. Never substitute a guessed shell
-command or run unsandboxed merely to improve coverage.
+attempt scratch bound at `/tmp`, timeout, disabled network, cleared
+environment, and no mount of `/`, `/home`, or host configuration directories.
+Runtime binaries must be provisioned under an approved system/runtime prefix; a
+runtime under a user home directory is `unsupported`, rather than making that
+home visible. Python, JavaScript, Go, and Cargo/Rust have Coordinator-owned
+adapters; TypeScript needs the approved `tsx` runtime. Java (Maven/Gradle),
+C/C++ (CMake), CUDA, ArkTS and ELP remain intentionally `unsupported` until
+their dedicated adapter validates its project metadata and public entrypoint.
+Never substitute a guessed shell command or run unsandboxed merely to improve
+coverage.
 
 ## Host-coordinated state machine
 
@@ -72,6 +92,12 @@ named Worker through its native subagent mechanism, then return its compact
 receipt to the state machine. The state machine owns admission, contract
 validation, optional build evidence, sandbox execution, retry/requeue, receipt
 validation, and the terminal summary.
+
+The Coordinator must process exactly one returned action at a time. After a
+Worker receipt, call `next`; after `run_dynamic`, call `run-dynamic`; after a
+finalization receipt, call `submit-finalization`. Never infer completion from a
+report path and never launch the next Worker before the executor returns its
+request.
 
 The probe must be self-contained, avoid network access and unrelated file I/O,
 use a public entry point rather than an internal module, catch errors, and print

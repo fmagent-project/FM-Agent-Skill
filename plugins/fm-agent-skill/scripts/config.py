@@ -6,6 +6,7 @@ import argparse
 import json
 
 from _common import project, state
+from fm_agent_core.languages import probe_adapter_choices
 
 DEFAULTS = {
     "submodules": [], "one_phase": False,
@@ -27,6 +28,11 @@ def load(target):
     result = dict(DEFAULTS)
     if isinstance(saved, dict):
         result.update({key: value for key, value in saved.items() if key in DEFAULTS})
+    if result["probe_adapter"] not in probe_adapter_choices():
+        raise ValueError(
+            "saved probe_adapter is unsupported by the LanguageProfile registry: "
+            f"{result['probe_adapter']}"
+        )
     return result
 
 
@@ -49,7 +55,7 @@ def main():
     parser.add_argument("--spec-batch-size", type=int)
     parser.add_argument("--bug-validation-max-attempts", type=int)
     parser.add_argument("--bug-validation-negative-retries", type=int)
-    parser.add_argument("--probe-adapter", choices=("auto", "cmake", "cargo", "go", "python", "java", "javascript", "typescript", "cuda", "arkts", "none"))
+    parser.add_argument("--probe-adapter", choices=probe_adapter_choices())
     parser.add_argument("--granularity", type=int)
     parser.add_argument("--retries", type=int)
     parser.add_argument("--lock-ttl-seconds", type=int)
@@ -61,7 +67,10 @@ def main():
     args = parser.parse_args(); target = project(args)
     if args.action == "reset":
         save(target, dict(DEFAULTS)); print(json.dumps(DEFAULTS, ensure_ascii=False, indent=2)); return
-    config = load(target)
+    try:
+        config = load(target)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.action == "set":
         for key in ("max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "scheduler_executor", "spec_batch_size", "bug_validation_max_attempts", "bug_validation_negative_retries", "probe_adapter", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
             value = getattr(args, key)

@@ -346,9 +346,12 @@ the normal scheduler admission, call:
 
 It returns exactly one next action. On `host_worker`, invoke only the named
 `fm-bug-validate-worker` pass through Codex/Claude's native subagent mechanism.
-After preparation, call `next`; on `run_dynamic`, call `run-dynamic`; after
-finalization, submit its compact receipt with `submit-finalization
---receipt-json ...`. Runtime errors requeue through the same state machine;
+Pass the returned `job_id`, `attempt`, allowed paths, and pass name to that
+Worker; do not let it reconstruct them from a prior attempt. After preparation,
+call `next`; on `run_dynamic`, call `run-dynamic`; after finalization, submit
+its compact receipt with `submit-finalization --receipt-json ...`. Process one
+returned action at a time: a report path alone is never evidence that an
+attempt finished. Runtime errors requeue through the same state machine;
 terminal phase summaries are written by it after all Bug Validator jobs finish.
 The state machine never invokes FM-Agent, an LLM API, or a shell command chosen
 by a Worker. `build_result.json` can never confirm or reject a defect. Read

@@ -24,6 +24,12 @@ Then run:
 Verify that the target is a Git repository with a resolvable `HEAD` and that it
 contains supported source files. These are the current installation checks.
 
+For source extraction without CodeGraph, verify that the declared Tree-sitter
+grammar is available to the Skill. Python may use its native AST and C/C++ may
+use their profile-declared Clang AST; all other languages require Tree-sitter.
+Do not enable a text or regular-expression fallback: absence of the applicable
+syntax source is a prerequisite failure, not a reason to guess boundaries.
+
 Explain any missing prerequisites.
 
 If all prerequisite checks succeed, explain that the environment is ready to

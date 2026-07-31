@@ -18,15 +18,10 @@ from pathlib import Path
 from _common import project, state
 from probe_runner import safe_component
 from fm_agent_core.languages import profile_for_key
+from sandbox import AdapterUnavailable, sandbox_command, sandbox_metadata
 
 
 MAX_OUTPUT_BYTES = 16_000
-# A runtime under a user home directory is deliberately not allowed: binding a
-# parent directory to make it executable would reintroduce host-secret reads.
-# Deployments that need Node/Cargo/tsx must provide them in this dedicated,
-# non-user-owned runtime prefix or in one of the system prefixes below.
-SAFE_RUNTIME_ROOTS = (Path("/usr/bin"), Path("/usr/local/bin"), Path("/usr/local/go"), Path("/opt/fm-agent-runtime"))
-SAFE_READONLY_DIRS = (Path("/usr"), Path("/lib"), Path("/lib64"), Path("/opt/fm-agent-runtime"))
 
 
 def attempt_dir(target: Path, bug_id: str, attempt: int) -> Path:
@@ -47,7 +42,7 @@ def read_contract(target: Path, bug_id: str, attempt: int) -> tuple[Path, dict]:
     }
     if set(contract) != expected:
         raise ValueError("reproduction contract has unexpected or missing fields")
-    if contract["schema_version"] != 1 or contract["bug_id"] != bug_id or contract["attempt"] != attempt:
+    if contract["schema_version"] != 2 or contract["bug_id"] != bug_id or contract["attempt"] != attempt:
         raise ValueError("reproduction contract identity does not match requested attempt")
     if contract["snapshot_commit"] != state.current_snapshot_commit(target):
         raise ValueError("reproduction contract snapshot does not match current analysis worktree")
@@ -55,8 +50,17 @@ def read_contract(target: Path, bug_id: str, attempt: int) -> tuple[Path, dict]:
     profile = profile_for_key(language) if isinstance(language, str) else None
     if profile is None or profile.probe_extension is None:
         raise ValueError(f"unsupported FM-Agent reproduction language: {language}")
-    if not isinstance(contract.get("public_entrypoint"), str) or not contract["public_entrypoint"].strip():
-        raise ValueError("reproduction contract requires a public entrypoint explanation")
+    entrypoint = contract.get("public_entrypoint")
+    if not isinstance(entrypoint, dict) or set(entrypoint) != {"ecosystem", "kind", "target", "symbol"}:
+        raise ValueError("reproduction contract requires structured public_entrypoint metadata")
+    if not all(isinstance(entrypoint.get(field), str) and entrypoint[field].strip() for field in ("ecosystem", "kind", "target", "symbol")):
+        raise ValueError("public_entrypoint fields must be non-empty strings")
+    expected_ecosystem = profile.dynamic_adapter or "unavailable"
+    if entrypoint["ecosystem"] != expected_ecosystem:
+        raise ValueError(f"public_entrypoint ecosystem must be {expected_ecosystem} for {profile.key}")
+    public_target = Path(entrypoint["target"])
+    if public_target.is_absolute() or ".." in public_target.parts:
+        raise ValueError("public_entrypoint target must be project-relative")
     if contract.get("expected_marker") != "CONFIRMED" or contract.get("not_confirmed_marker") != "NOT CONFIRMED":
         raise ValueError("reproduction contract must use the fixed confirmation markers")
     if not isinstance(contract.get("timeout_seconds"), int) or not 1 <= contract["timeout_seconds"] <= 120:
@@ -70,12 +74,13 @@ def read_contract(target: Path, bug_id: str, attempt: int) -> tuple[Path, dict]:
     return root, contract
 
 
-class AdapterUnavailable(ValueError):
-    """An expected project ecosystem or sandbox is not available locally."""
-
-
 def _virtual_probe(target: Path, root: Path, contract: dict) -> str:
     return "/project/" + (root / contract["probe_file"]).relative_to(target).as_posix()
+
+
+def _virtual_entrypoint(contract: dict) -> str:
+    target = Path(contract["public_entrypoint"]["target"])
+    return "/project" if target == Path(".") else "/project/" + target.as_posix()
 
 
 def _rust_runner(target: Path, root: Path, contract: dict, scratch: Path) -> tuple[list[str], dict[str, str]]:
@@ -102,62 +107,25 @@ def _rust_runner(target: Path, root: Path, contract: dict, scratch: Path) -> tup
 def command_for(target: Path, root: Path, contract: dict, scratch: Path) -> tuple[list[str], dict[str, str]]:
     """Return only Coordinator-owned argv and environment for one ecosystem."""
     language, probe = contract["language"], _virtual_probe(target, root, contract)
+    entrypoint = _virtual_entrypoint(contract)
     if language == "python":
-        return [sys.executable, "-c", "import runpy; runpy.run_path(__import__('sys').argv[1], run_name='__main__')", probe], {"PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "FM_AGENT_PROJECT_ROOT": "/project"}
+        return [sys.executable, "-c", "import runpy; runpy.run_path(__import__('sys').argv[1], run_name='__main__')", probe], {"PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1", "FM_AGENT_PROJECT_ROOT": "/project", "FM_AGENT_PUBLIC_ENTRY": entrypoint}
     if language == "javascript":
         node = shutil.which("node")
         if not node: raise AdapterUnavailable("Node.js is unavailable")
-        return [node, probe], {"FM_AGENT_PROJECT_ROOT": "/project", "FM_AGENT_PUBLIC_ENTRY": "/project"}
+        return [node, probe], {"FM_AGENT_PROJECT_ROOT": "/project", "FM_AGENT_PUBLIC_ENTRY": entrypoint}
     if language == "typescript":
         tsx = shutil.which("tsx")
         if not tsx: raise AdapterUnavailable("TypeScript dynamic reproduction requires the approved tsx runtime")
-        return [tsx, probe], {"FM_AGENT_PROJECT_ROOT": "/project", "FM_AGENT_PUBLIC_ENTRY": "/project"}
+        return [tsx, probe], {"FM_AGENT_PROJECT_ROOT": "/project", "FM_AGENT_PUBLIC_ENTRY": entrypoint}
     if language == "go":
         go = shutil.which("go")
         if not go or not (target / "go.mod").is_file(): raise AdapterUnavailable("Go dynamic reproduction requires go and go.mod")
         return [go, "run", probe], {"GOCACHE": "/tmp/go-cache", "GOMODCACHE": "/tmp/go-mod-cache", "GOPROXY": "off", "FM_AGENT_PROJECT_ROOT": "/project"}
     if language == "rust": return _rust_runner(target, root, contract, scratch)
     profile = profile_for_key(language)
-    ecosystems = ", ".join(profile.runtime_ecosystems) if profile else ""
-    raise AdapterUnavailable(f"no approved sandboxed dynamic adapter for {language}{': ' + ecosystems if ecosystems else ''}")
-
-
-def sandbox_command(target: Path, scratch: Path, command: list[str]) -> list[str]:
-    """Build a fail-closed Bubblewrap command without exposing host root/home."""
-    bwrap = shutil.which("bwrap")
-    if not bwrap: raise AdapterUnavailable("bubblewrap is required; unsafe probe execution is intentionally disabled")
-    executable = Path(command[0]).resolve()
-    if not executable.is_file() or not any(executable.is_relative_to(root) for root in SAFE_RUNTIME_ROOTS):
-        raise AdapterUnavailable(
-            "approved runtime must be installed below /usr/bin, /usr/local/bin, "
-            "/usr/local/go, or /opt/fm-agent-runtime; user-home runtimes are not mounted"
-        )
-    scratch.mkdir(parents=True, exist_ok=True)
-    mounts = [item for item in SAFE_READONLY_DIRS if item.is_dir()]
-    result = [bwrap, "--die-with-parent", "--new-session", "--unshare-net", "--unshare-pid", "--clearenv"]
-    # Mount only system runtime trees.  Never mount /, /home, or the host's
-    # configuration directories.  Dynamic-loader data is supplied by /lib*.
-    mounted = []
-    for directory in mounts:
-        parent_is_available = directory.parent == Path("/") or any(
-            directory.parent == prior or directory.parent.is_relative_to(prior) for prior in mounted
-        )
-        if not parent_is_available:
-            result += ["--dir", str(directory.parent)]
-        result += ["--ro-bind", str(directory), str(directory)]
-        mounted.append(directory)
-    result += [
-        "--dir", "/project", "--ro-bind", str(target), "/project",
-        # scratch is created by the Coordinator below this attempt only.  It is
-        # the sole writable mount and must remain visible to adapters such as
-        # Cargo that prepare a controlled runner under /tmp.
-        "--bind", str(scratch), "/tmp", "--proc", "/proc", "--dev", "/dev", "--chdir", "/project",
-        "--setenv", "HOME", "/tmp/home", "--setenv", "TMPDIR", "/tmp",
-        "--setenv", "PATH", "/usr/bin:/usr/local/bin:/usr/local/go/bin:/opt/fm-agent-runtime",
-        "--",
-        *command,
-    ]
-    return result
+    adapter = profile.dynamic_adapter if profile else None
+    raise AdapterUnavailable(f"no approved sandboxed dynamic adapter for {language}{': expected ' + adapter if adapter else ''}")
 
 
 def output_classification(stdout: str, returncode: int) -> tuple[str, str]:
@@ -193,16 +161,9 @@ def run(target: Path, bug_id: str, attempt: int) -> dict:
         # submitted probe and its immutable result stay at the attempt root.
         scratch = root / "sandbox"
         inner_command, adapter_env = command_for(target, root, contract, scratch)
-        command = sandbox_command(target, scratch, inner_command)
-        # Bubblewrap clears the inherited host environment; only adapter values
-        # are reintroduced as explicit --setenv arguments below.
-        sandbox_env = []
-        for key, value in adapter_env.items():
-            sandbox_env += ["--setenv", key, value]
-        marker = command.index("--")
-        command = [*command[:marker], *sandbox_env, *command[marker:]]
+        command = sandbox_command(target, scratch, inner_command, adapter_env)
         result["command"] = command
-        result["sandbox"] = {"engine": "bubblewrap", "network": "disabled", "project": "read-only", "tmp": "private", "host_root": "not-mounted", "host_home": "not-mounted"}
+        result["sandbox"] = sandbox_metadata()
         try:
             completed = subprocess.run(command, cwd=target, text=True, capture_output=True, timeout=contract["timeout_seconds"], env={})
             stdout, stderr = completed.stdout[-MAX_OUTPUT_BYTES:], completed.stderr[-MAX_OUTPUT_BYTES:]

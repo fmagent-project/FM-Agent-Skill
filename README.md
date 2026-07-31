@@ -125,7 +125,7 @@ runtime failures up to five attempts and repeats a completed negative result
 twice by default, preserving all three probes.
 
 Bug validation has two deliberately separate surfaces. `probe_runner.py` is a
-language/build-neutral build or syntax check and is never behavioral proof.
+language-profile-selected build or syntax check and is never behavioral proof.
 The Bug Validator first designs a public-entrypoint probe; the Coordinator then
 executes it through `reproduction_runner.py`, whose command is fixed by the
 approved language adapter. Only its persisted runtime output may confirm a
@@ -136,7 +136,9 @@ view and disabled network, and is approved for Python, JavaScript, Go,
 Cargo/Rust, and TypeScript only when their runtime is provisioned in an
 approved non-user-owned runtime prefix (and `tsx` is available for TypeScript). Java,
 C/C++, CUDA, and ArkTS remain `inconclusive` until their Maven/Gradle, CMake,
-NVCC, or Hvigor adapters can validate public-entrypoint metadata. The Skill
+NVCC, or Hvigor adapters can validate public-entrypoint metadata. Both build
+and dynamic adapters use the same no-network Bubblewrap policy: a read-only
+project, private attempt scratch, and no host root or home mount. The Skill
 never executes an Agent-provided shell command merely to claim coverage.
 
 Bug Validation is host-coordinated: `bug_validation_executor.py` enforces the
