@@ -16,6 +16,7 @@ DEFAULTS = {
     "bug_validation_concurrency": 1,
     "read_only_plan_concurrency": 2,
     "spec_batch_size": 1, "bug_validation_max_attempts": 5, "bug_validation_negative_retries": 2,
+    "probe_adapter": "auto",
     "granularity": 40, "retries": 5, "lock_ttl_seconds": 7200, "resume_grace_seconds": 600,
     "codegraph_path": None, "call_graph_backend": "agent-static", "extra_edge": None, "knowledge": [],
 }
@@ -48,6 +49,7 @@ def main():
     parser.add_argument("--spec-batch-size", type=int)
     parser.add_argument("--bug-validation-max-attempts", type=int)
     parser.add_argument("--bug-validation-negative-retries", type=int)
+    parser.add_argument("--probe-adapter", choices=("auto", "cmake", "cargo", "go", "python", "java", "javascript", "typescript", "cuda", "arkts", "none"))
     parser.add_argument("--granularity", type=int)
     parser.add_argument("--retries", type=int)
     parser.add_argument("--lock-ttl-seconds", type=int)
@@ -61,7 +63,7 @@ def main():
         save(target, dict(DEFAULTS)); print(json.dumps(DEFAULTS, ensure_ascii=False, indent=2)); return
     config = load(target)
     if args.action == "set":
-        for key in ("max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "scheduler_executor", "spec_batch_size", "bug_validation_max_attempts", "bug_validation_negative_retries", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
+        for key in ("max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "scheduler_executor", "spec_batch_size", "bug_validation_max_attempts", "bug_validation_negative_retries", "probe_adapter", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
             value = getattr(args, key)
             if value is not None: config[key] = value
         if args.submodules is not None: config["submodules"] = args.submodules

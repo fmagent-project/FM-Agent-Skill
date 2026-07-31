@@ -10,7 +10,7 @@ from _common import project, state
 
 
 def language_for(path: str) -> str:
-    return {".py": "python", ".go": "go", ".rs": "rust", ".java": "java", ".erl": "erlang", ".js": "javascript", ".jsx": "javascript", ".ts": "typescript", ".tsx": "typescript", ".ets": "arkts", ".cu": "cuda"}.get(Path(path).suffix.lower(), "c++")
+    return {".py": "python", ".go": "go", ".rs": "rust", ".java": "java", ".js": "javascript", ".jsx": "javascript", ".ts": "typescript", ".tsx": "typescript", ".ets": "arkts", ".cu": "cuda", ".cuh": "cuda"}.get(Path(path).suffix.lower(), "c++")
 
 
 def build(target, scope):

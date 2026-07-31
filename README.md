@@ -124,6 +124,13 @@ valid `ERROR` result rather than a scheduling retry. Bug Validator retries
 runtime failures up to five attempts and repeats a completed negative result
 twice by default, preserving all three probes.
 
+Bug probes use a language/build-neutral runner rather than a CMake-only path.
+It recognizes the original FM-Agent source set except Erlang: C/C++, Python,
+Go, Rust, Java, JavaScript, TypeScript, CUDA, and ArkTS. Each probe attempt
+gets its own `fm_agent_skill/probes/<bug-id>/attempt_<n>/` directory and a
+recorded safe adapter; unsupported toolchains become `inconclusive` rather than
+executing an Agent-provided shell command.
+
 `input`, `semantic`, and `cancelled` failures are terminal. They leave
 dependents unscheduled and fail the current phase without discarding valid,
 independent job outputs. On resume, the Coordinator first reconciles stale

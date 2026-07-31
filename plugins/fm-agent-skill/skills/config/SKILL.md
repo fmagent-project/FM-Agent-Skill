@@ -9,6 +9,7 @@ Configuration lives at `fm_agent_skill/config.json` in the target repository.
 It holds defaults for submodules, one-phase policy, host
 subagent executor, global and worker-type concurrency caps, specification
 batch size, Bug Validator runtime-attempt limit and negative-probe repeat count,
+and an optional safe probe adapter override,
 granularity, retry count, lock TTL, resume grace period, the CodeGraph command and selected graph
 backend, extra-edge reference, and Markdown knowledge references. It never
 copies API keys or knowledge file contents.

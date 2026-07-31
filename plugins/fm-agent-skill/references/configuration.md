@@ -23,6 +23,11 @@ through `max_active_subagents`, `spec_concurrency`, `verify_concurrency`,
 `2` additional completed negative probes. These scheduling and retry
 limits are operational only and are excluded from the analysis fingerprint.
 
+`probe_adapter` defaults to `auto`. It may select only `cmake`, `cargo`, `go`,
+`python`, `java`, `javascript`, `typescript`, `cuda`, `arkts`, or `none`; it
+does not accept a shell command. Automatic selection records the chosen adapter
+and the recognized source languages in `fm_agent_skill/control/build_profile.json`.
+
 Every analysis creates one detached Git worktree from a private snapshot
 commit. The snapshot captures tracked and non-ignored working-tree changes
 without moving the user's branch, index, or `HEAD`. The Coordinator must use

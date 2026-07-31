@@ -15,7 +15,9 @@ from pathlib import Path
 import subprocess
 
 
-SOURCE_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".cu", ".go", ".h", ".hpp", ".java", ".js", ".jsx", ".py", ".rs", ".ts", ".tsx", ".ets", ".erl"}
+# Keep the original FM-Agent extraction surface, except Erlang/ELP is outside
+# this Skill's supported runtime.
+SOURCE_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".cu", ".cuh", ".go", ".h", ".hpp", ".java", ".js", ".jsx", ".py", ".rs", ".ts", ".tsx", ".ets"}
 METADATA_SIDECAR_SUFFIXES = (".spec.json", ".info.json")
 VERDICTS = {"MATCH", "MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"}
 SPEC_FIELDS = {"signature", "pre_condition", "post_condition", "evidence", "confidence"}
@@ -124,7 +126,7 @@ def fingerprint(project: Path, one_phase: bool, submodules: list[str], extra_edg
     # an analysis.  It must not invalidate baselines or interrupted runs.
     fingerprint_config = dict(config or {})
     # Scheduling changes alter resource use, not the meaning of an analysis.
-    for key in ("resume_grace_seconds", "scheduler_executor", "max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "spec_batch_size", "retries", "lock_ttl_seconds", "bug_validation_max_attempts", "bug_validation_negative_retries"):
+    for key in ("resume_grace_seconds", "scheduler_executor", "max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "spec_batch_size", "retries", "lock_ttl_seconds", "bug_validation_max_attempts", "bug_validation_negative_retries", "probe_adapter"):
         fingerprint_config.pop(key, None)
     inputs = {
         "one_phase": bool(one_phase),

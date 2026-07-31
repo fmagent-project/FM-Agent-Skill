@@ -323,16 +323,28 @@ Build native phase-layer artifacts after a valid `phases.json`:
 
 Write `MISMATCH` only for a function's own specification violation. If the
 function is affected solely by a mismatching callee, write `DEPENDENCY_RISK`
-with the affected callee IDs and do not send it to Bug Validator. For each
-direct CMake candidate, first run:
+with the affected callee IDs and do not send it to Bug Validator. Before the
+first direct candidate, detect and record the safe build adapter:
 
 ```bash
-<python3> "$FM_AGENT_SKILL_ROOT/scripts/probe_build.py" \
-  --project "$PROJECT" --bug-id "$BUG_ID"
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/probe_runner.py" detect \
+  --project "$PROJECT"
 ```
 
-Use the resulting isolated build directory for the probe. Do not reuse a
-project `build/` directory or its `CMakeCache.txt`.
+For every launch of a Bug Validator job, pass its current overall job attempt
+as `--attempt`; this makes a retry immutable even when it is retrying the same
+negative validation index:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/probe_runner.py" run \
+  --project "$PROJECT" --bug-id "$BUG_ID" --attempt "$JOB_ATTEMPT"
+```
+
+Read its `build_result.json` and classify a completed unsupported adapter as
+`inconclusive`. A nonzero adapter command is probe evidence for the worker to
+interpret; only failure to run the runner or write its result is a scheduler
+runtime failure. Do not pass arbitrary commands to the runner. Read
+[bug-validation.md](../../references/bug-validation.md) for adapter coverage.
 
 Only after every phase gate succeeds may the agent call `pipeline.py complete`
 and release the lock as `idle`. Never modify business source or extracted

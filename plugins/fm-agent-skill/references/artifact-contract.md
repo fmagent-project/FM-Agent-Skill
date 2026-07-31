@@ -51,7 +51,7 @@ All mutable Skill state lives under `fm_agent_skill/`.
   identity inventory for one snapshot commit. Precision, incremental
   diff/selection,
   `graph_edges.json`, and validated `agent_static_edges.json` are Skill-owned
-  control artifacts. Active analysis state, locks, scheduler jobs, and probe-build results also belong in
+  control artifacts. Active analysis state, locks, scheduler jobs, build profiles, and probe results also belong in
   `fm_agent_skill/`, never in `fm_agent/`. Only the Coordinator and
   deterministic scripts may write Skill-owned control state.
 
