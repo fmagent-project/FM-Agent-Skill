@@ -172,8 +172,9 @@ the original project, and removes the temporary worktree. `pipeline.py fail`
 deliberately retains the snapshot for resume. Invoke `--resume` against the
 original project; its marker redirects it to the retained snapshot.
 
-During graph construction, export its normalized function and edge data into
-Skill control state, then supply that file to `executor.py graph`:
+After a CodeGraph rebuild and before extraction, export its normalized function
+and edge data into Skill control state. Supply the same file to both
+`executor.py extract` (for authoritative function spans) and `executor.py graph`:
 
 ```bash
 <python3> "$FM_AGENT_SKILL_ROOT/scripts/codegraph.py" export --project "$PROJECT" \
@@ -312,7 +313,8 @@ created for a declaration-only header.
 Build the Skill control index after extraction:
 
 ```bash
-<python3> "$FM_AGENT_SKILL_ROOT/scripts/executor.py" extract --project "$PROJECT"
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/executor.py" extract --project "$PROJECT" \
+  [--codegraph-export "$PROJECT/fm_agent_skill/control/codegraph_export.json"]
 ```
 
 Build native phase-layer artifacts after a valid `phases.json`:

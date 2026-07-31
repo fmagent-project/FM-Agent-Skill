@@ -14,10 +14,13 @@ import os
 from pathlib import Path
 import subprocess
 
+from .languages import source_extensions
 
-# Keep the original FM-Agent extraction surface, except Erlang/ELP is outside
-# this Skill's supported runtime.
-SOURCE_EXTENSIONS = {".c", ".cc", ".cpp", ".cxx", ".cu", ".cuh", ".go", ".h", ".hpp", ".java", ".js", ".jsx", ".py", ".rs", ".ts", ".tsx", ".ets"}
+
+# Language recognition is centralised in languages.py.  External-plugin
+# profiles (currently Erlang/ELP) are intentionally not silently accepted by
+# the core executor: they require their dedicated capability to be installed.
+SOURCE_EXTENSIONS = source_extensions()
 METADATA_SIDECAR_SUFFIXES = (".spec.json", ".info.json")
 VERDICTS = {"MATCH", "MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"}
 BUG_ATTEMPT_CLASSIFICATIONS = {"confirmed", "not_reproduced", "inconclusive"}

@@ -40,13 +40,20 @@ fm_agent_skill/probes/<bug-id>/attempt_<n>/
 }
 ```
 
-Use the fixed extension for the language (`.c`, `.cpp`, `.py`, `.go`, `.rs`,
-`.java`, `.js`, `.ts`, `.cu`, `.ets`). The probe must be self-contained, make
-no network call, avoid arbitrary file I/O, call only through the public entry
-point, catch runtime errors, and print exactly one first-line marker:
+Use the fixed extension from the assigned language profile. The probe must be
+self-contained, make no network call, avoid arbitrary file I/O, call only
+through the public entry point, catch runtime errors, and print exactly one
+first-line marker:
 `CONFIRMED` when actual behavior differs from the externally evidenced contract,
 or `NOT CONFIRMED` when it does not. Do not run it yourself and do not put a
 shell command in the contract.
+
+The runner exposes a read-only project root as `FM_AGENT_PROJECT_ROOT`. For
+Node/TypeScript, load the package root through
+`process.env.FM_AGENT_PUBLIC_ENTRY` rather than `require('.')`: the probe is
+stored below `fm_agent_skill/probes/`, so relative module resolution is not the
+project public entry point. For Rust, use the public crate name exposed as
+`FM_AGENT_RUST_CRATE`. Do not substitute an internal source-file import.
 
 Return a compact preparation receipt. The Coordinator validates the contract,
 runs the optional build probe and then `reproduction_runner.py`. If that runner

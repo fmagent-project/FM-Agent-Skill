@@ -7,7 +7,6 @@ Claude/Codex Coordinator invokes its actions between semantic worker jobs.
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 from pathlib import Path
 import re
@@ -15,34 +14,11 @@ import shutil
 
 from _common import project, state
 from artifact_index import build as build_index
-
-
-FUNCTION = re.compile(r"^\s*(?:[\w:<>,~*&]+\s+)+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:const\s*)?\{", re.MULTILINE)
+from fm_agent_core.languages import function_spans, profile_for_path
 
 
 def _safe(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip(".-") or "function"
-
-
-def _python_functions(path: Path) -> list[tuple[str, int, int]]:
-    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
-    return [(node.name, node.lineno, getattr(node, "end_lineno", node.lineno)) for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
-
-
-def _fallback_functions(path: Path) -> list[tuple[str, int, int]]:
-    text = path.read_text(encoding="utf-8", errors="replace")
-    found = []
-    for match in FUNCTION.finditer(text):
-        start = text.count("\n", 0, match.start()) + 1
-        depth = 0; end_offset = match.end() - 1
-        for offset in range(match.end() - 1, len(text)):
-            if text[offset] == "{": depth += 1
-            elif text[offset] == "}":
-                depth -= 1
-                if depth == 0:
-                    end_offset = offset; break
-        found.append((match.group(1), start, text.count("\n", 0, end_offset) + 1))
-    return found
 
 
 def _is_test_source(rel: str) -> bool:
@@ -103,14 +79,41 @@ def normalize_phases(target: Path) -> dict:
     state.atomic_json(path, data); return {"phase_count": len(normalized), "phases": [item["phase"] for item in normalized]}
 
 
-def extract(target: Path, submodules: list[str]) -> dict:
+def _codegraph_spans(target: Path, export_path: Path | None) -> dict[str, list[tuple[str, int, int]]]:
+    """Map the optional CodeGraph export to repository-relative source spans."""
+    if export_path is None:
+        return {}
+    payload = state.read_json(export_path, {})
+    nodes = payload.get("nodes") if isinstance(payload, dict) else None
+    if not isinstance(nodes, list):
+        raise ValueError("CodeGraph export must contain a nodes array")
+    result: dict[str, list[tuple[str, int, int]]] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        path, name, start, end = node.get("path"), node.get("name"), node.get("line_start"), node.get("line_end")
+        if not isinstance(path, str) or not isinstance(name, str) or not isinstance(start, int) or not isinstance(end, int):
+            continue
+        source = _source_path(target, path)
+        profile = profile_for_path(source)
+        # A CodeGraph record is authoritative only when its normalized language
+        # agrees with the profile selected from the source extension.
+        if profile is None or (node.get("language") and node["language"] not in profile.codegraph_languages):
+            continue
+        result.setdefault(source, []).append((name, start, end))
+    return result
+
+
+def extract(target: Path, submodules: list[str], codegraph_export: Path | None = None) -> dict:
     root = state.fm_dir(target) / "extracted_functions"
     if root.exists(): shutil.rmtree(root)
     manifest = []
+    codegraph = _codegraph_spans(target, codegraph_export)
+    provenance: dict[str, str] = {}
     for source in _sources(target, submodules):
         rel = source.relative_to(target).as_posix()
-        try: functions = _python_functions(source) if source.suffix.lower() == ".py" else _fallback_functions(source)
-        except (SyntaxError, OSError): functions = _fallback_functions(source)
+        functions, origin = function_spans(source, codegraph.get(rel))
+        provenance[rel] = origin
         lines = source.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
         counts = {name: sum(1 for candidate, _, _ in functions if candidate == name) for name, _, _ in functions}
         occurrences: dict[str, int] = {}
@@ -120,11 +123,11 @@ def extract(target: Path, submodules: list[str]) -> dict:
             destination = root / artifact; destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text("".join(lines[start - 1:end]), encoding="utf-8")
             suffix = f"#{occurrences[name]}" if counts[name] > 1 else ""
-            manifest.append({"artifact": artifact.as_posix(), "source_path": rel, "name": name, "function_id": f"{rel}::{name}{suffix}", "line_start": start, "line_end": end})
+            manifest.append({"artifact": artifact.as_posix(), "source_path": rel, "name": name, "function_id": f"{rel}::{name}{suffix}", "line_start": start, "line_end": end, "extraction_backend": origin})
     state.atomic_json(state.fm_dir(target) / "extraction_manifest.json", {"schema_version": 1, "generated_at": state.now(), "functions": manifest})
     state.atomic_json(state.fm_dir(target) / "fm_agent_file_list.json", sorted(item["artifact"] for item in manifest))
     index = build_index(target, submodules)
-    return {"function_count": len(manifest), "index": index}
+    return {"function_count": len(manifest), "index": index, "extraction_backends": provenance}
 
 
 def _source_path(target: Path, value: str) -> str:
@@ -319,7 +322,8 @@ def main() -> None:
     parser.add_argument("action", choices=("normalize-phases", "extract", "graph", "record-agent-edges", "preserve-specs", "restore-specs", "diff", "select")); parser.add_argument("--project", required=True); parser.add_argument("--submodule", action="append", default=[]); parser.add_argument("--codegraph-export"); parser.add_argument("--edges-file")
     args = parser.parse_args(); target = project(args)
     if args.action == "record-agent-edges" and not args.edges_file: parser.error("record-agent-edges requires --edges-file")
-    result = {"normalize-phases": lambda: normalize_phases(target), "extract": lambda: extract(target, args.submodule), "graph": lambda: graph(target, Path(args.codegraph_export) if args.codegraph_export else None), "record-agent-edges": lambda: record_agent_edges(target, Path(args.edges_file)), "preserve-specs": lambda: preserve_specs(target), "restore-specs": lambda: restore_specs(target), "diff": lambda: diff(target), "select": lambda: select(target)}[args.action]()
+    exported = Path(args.codegraph_export) if args.codegraph_export else None
+    result = {"normalize-phases": lambda: normalize_phases(target), "extract": lambda: extract(target, args.submodule, exported), "graph": lambda: graph(target, exported), "record-agent-edges": lambda: record_agent_edges(target, Path(args.edges_file)), "preserve-specs": lambda: preserve_specs(target), "restore-specs": lambda: restore_specs(target), "diff": lambda: diff(target), "select": lambda: select(target)}[args.action]()
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

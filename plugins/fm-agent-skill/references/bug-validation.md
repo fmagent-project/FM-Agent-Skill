@@ -14,9 +14,12 @@ may produce `confirmed`.
 
 Before the first candidate, run `probe_runner.py detect`; its profile at
 `fm_agent_skill/control/build_profile.json` selects an optional safe build
-adapter. It recognizes C/C++, Python, Go, Rust, Java, JavaScript, TypeScript,
-CUDA, and ArkTS; Erlang is excluded. Build adapters run only fixed commands and
-may not be mistaken for a reproduction.
+adapter. Language capabilities are defined once in
+`src/fm_agent_core/languages.py`: CodeGraph names, Tree-sitter grammar names,
+file extensions, build ecosystems, runtime ecosystems, and support level must
+all come from that registry. Erlang remains an explicit ELP capability plugin.
+Build adapters run only fixed commands and may not be mistaken for a
+reproduction.
 
 ## Controlled dynamic reproduction
 
@@ -41,11 +44,14 @@ For each candidate and attempt:
    `reproduction_result.json`, then call `scheduler.py complete` with the
    matching classification.
 
-The runner accepts no Agent-provided command. It can dynamically execute Python,
-JavaScript, and Go probes using fixed command templates. For C/C++, Rust, Java,
-TypeScript, CUDA, and ArkTS it writes a completed `unsupported` result and the
-worker reports `inconclusive` until a dedicated approved adapter exists. This is
-intentional: do not substitute a guessed shell command.
+The runner accepts no Agent-provided command. It executes only an approved
+ecosystem adapter and, when Bubblewrap is available, uses a read-only project
+mount, private temporary directory, timeout, and disabled network. Python,
+JavaScript, Go, and Cargo/Rust have Coordinator-owned adapters; TypeScript needs
+the approved `tsx` runtime. Java (Maven/Gradle), C/C++ (CMake), CUDA, ArkTS and
+ELP remain intentionally `unsupported` until their dedicated adapter validates
+its project metadata and public entrypoint. Never substitute a guessed shell
+command or run unsandboxed merely to improve coverage.
 
 The probe must be self-contained, avoid network access and unrelated file I/O,
 use a public entry point rather than an internal module, catch errors, and print

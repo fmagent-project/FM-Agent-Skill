@@ -129,10 +129,14 @@ language/build-neutral build or syntax check and is never behavioral proof.
 The Bug Validator first designs a public-entrypoint probe; the Coordinator then
 executes it through `reproduction_runner.py`, whose command is fixed by the
 approved language adapter. Only its persisted runtime output may confirm a
-candidate. C/C++, Python, Go, Rust, Java, JavaScript, TypeScript, CUDA, and
-ArkTS are recognized (Erlang is excluded); dynamic execution is currently
-approved for Python, JavaScript, and Go. Other languages are retained as
-`inconclusive` rather than executing an Agent-provided shell command.
+candidate. The central language-profile registry recognizes C/C++, Python, Go,
+Rust, Java, JavaScript, TypeScript, CUDA, and ArkTS; Erlang remains an explicit
+ELP capability plugin. Dynamic execution is sandboxed with a read-only project
+view and disabled network, and is currently approved for Python, JavaScript,
+Go, Cargo/Rust, and TypeScript when the `tsx` runtime is available. Java,
+C/C++, CUDA, and ArkTS remain `inconclusive` until their Maven/Gradle, CMake,
+NVCC, or Hvigor adapters can validate public-entrypoint metadata. The Skill
+never executes an Agent-provided shell command merely to claim coverage.
 
 `input`, `semantic`, and `cancelled` failures are terminal. They leave
 dependents unscheduled and fail the current phase without discarding valid,

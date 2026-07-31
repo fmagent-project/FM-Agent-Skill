@@ -7,10 +7,11 @@ import json
 from pathlib import Path
 
 from _common import project, state
+from fm_agent_core.languages import language_name
 
 
 def language_for(path: str) -> str:
-    return {".py": "python", ".go": "go", ".rs": "rust", ".java": "java", ".js": "javascript", ".jsx": "javascript", ".ts": "typescript", ".tsx": "typescript", ".ets": "arkts", ".cu": "cuda", ".cuh": "cuda"}.get(Path(path).suffix.lower(), "c++")
+    return language_name(path)
 
 
 def build(target, scope):

@@ -16,13 +16,13 @@ import subprocess
 import sys
 
 from _common import project, state
+from fm_agent_core.languages import PROFILES
 
 
+# Derived from the central registry; do not add extension maps in this runner.
 LANGUAGE_EXTENSIONS = {
-    "c": {".c"}, "cpp": {".cc", ".cpp", ".cxx", ".h", ".hpp"},
-    "python": {".py"}, "go": {".go"}, "rust": {".rs"}, "java": {".java"},
-    "javascript": {".js", ".jsx"}, "typescript": {".ts", ".tsx"},
-    "cuda": {".cu", ".cuh"}, "arkts": {".ets"},
+    profile.key: set(profile.extensions) for profile in PROFILES
+    if profile.support_level != "external-plugin"
 }
 IGNORED_DIRS = {".git", ".codegraph", "fm_agent", "fm_agent_skill", "node_modules", "build", "target", "dist", "out", "__pycache__"}
 ADAPTERS = {"auto", "cmake", "cargo", "go", "python", "java", "javascript", "typescript", "cuda", "arkts", "none"}
@@ -78,7 +78,8 @@ def profile(target: Path, requested: str) -> dict:
     if adapter == "cuda": reason, supported = "CUDA requires an explicitly approved toolchain adapter", False
     if adapter == "arkts": reason, supported = "ArkTS requires an explicitly approved toolchain adapter", False
     if adapter == "none": supported = False
-    return {"schema_version": 1, "project": str(target), "languages": language_keys, "excluded_languages": ["erlang"], "adapter": adapter, "supported": supported, "reason": reason, "generated_at": state.now()}
+    excluded = [profile.key for profile in PROFILES if profile.support_level == "external-plugin"]
+    return {"schema_version": 2, "project": str(target), "languages": language_keys, "excluded_languages": excluded, "adapter": adapter, "supported": supported, "reason": reason, "generated_at": state.now()}
 
 
 def run_command(command: list[str], cwd: Path, env: dict[str, str], timeout: int) -> dict:
