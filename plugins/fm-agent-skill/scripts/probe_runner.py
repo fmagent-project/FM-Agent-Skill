@@ -134,8 +134,14 @@ def configured_adapter(target: Path, requested: str | None) -> str:
 def run_probe(target: Path, bug_id: str, attempt_number: int, requested: str, timeout: int, cmake_target: str | None) -> dict:
     data = profile(target, requested); profile_path = write_profile(target, data)
     attempt = state.skill_dir(target) / "probes" / safe_component(bug_id) / f"attempt_{attempt_number:03d}"
-    if attempt.exists(): raise ValueError(f"probe attempt already exists and is immutable: {attempt}")
-    attempt.mkdir(parents=True)
+    # The host Bug Validator preparation pass owns reproduction.json/probe.* in
+    # this immutable attempt directory.  Build evidence is coordinator-owned
+    # and may be added exactly once beside those artifacts.
+    if attempt.exists() and not (attempt / "reproduction.json").is_file():
+        raise ValueError(f"probe attempt exists without a prepared reproduction contract: {attempt}")
+    attempt.mkdir(parents=True, exist_ok=True)
+    if (attempt / "build_result.json").exists():
+        raise ValueError(f"build result already exists and is immutable: {attempt / 'build_result.json'}")
     result = {"schema_version": 1, "bug_id": bug_id, "attempt": attempt_number, "attempt_dir": str(attempt), "profile_path": str(profile_path), "profile": data, "commands": [], "started_at": state.now()}
     if not data["supported"]:
         result.update({"state": "unsupported", "ok": False, "reason": data["reason"] or "unsupported adapter"})

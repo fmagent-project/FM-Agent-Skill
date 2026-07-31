@@ -11,6 +11,13 @@ analysis. They cannot spawn workers or write `fm_agent_skill/` control state;
 the sole exception is an assigned immutable worker report under
 `fm_agent_skill/worker_reports/<job-id>.json`.
 
+This is a host-native Coordinator, not the original FM-Agent process: it must
+use Codex or Claude Code's internal subagent mechanism and must never invoke
+`FM-Agent/main.py`, import its pipeline, or call its remote-LLM API. For Bug
+Validator jobs, `bug_validation_executor.py` supplies the deterministic next
+action and invokes local safe runners; the host supplies only its preparation
+and finalization Worker calls.
+
 Use only two target-project output roots: `fm_agent/` for FM-Agent-compatible
 analysis artifacts and `fm_agent_skill/` for mutable Skill state. Derive no
 target-project path from the Skill's installation or marketplace packaging.

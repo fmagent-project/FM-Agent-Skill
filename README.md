@@ -132,11 +132,17 @@ approved language adapter. Only its persisted runtime output may confirm a
 candidate. The central language-profile registry recognizes C/C++, Python, Go,
 Rust, Java, JavaScript, TypeScript, CUDA, and ArkTS; Erlang remains an explicit
 ELP capability plugin. Dynamic execution is sandboxed with a read-only project
-view and disabled network, and is currently approved for Python, JavaScript,
-Go, Cargo/Rust, and TypeScript when the `tsx` runtime is available. Java,
+view and disabled network, and is approved for Python, JavaScript, Go,
+Cargo/Rust, and TypeScript only when their runtime is provisioned in an
+approved non-user-owned runtime prefix (and `tsx` is available for TypeScript). Java,
 C/C++, CUDA, and ArkTS remain `inconclusive` until their Maven/Gradle, CMake,
 NVCC, or Hvigor adapters can validate public-entrypoint metadata. The Skill
 never executes an Agent-provided shell command merely to claim coverage.
+
+Bug Validation is host-coordinated: `bug_validation_executor.py` enforces the
+preparation → sandbox runner → finalization → retry/summary state machine, while
+Codex or Claude Code invokes the two semantic Worker passes through its native
+subagent capability. It does not run or import the original FM-Agent pipeline.
 
 `input`, `semantic`, and `cancelled` failures are terminal. They leave
 dependents unscheduled and fail the current phase without discarding valid,

@@ -67,6 +67,10 @@ detail Markdown report and exactly one assigned
 `fm_agent/bug_validation/*.result.json`. Append one attempt; never overwrite
 earlier evidence. Each attempt contains `ordinal`, `classification`,
 `trigger`, `probe`, `output`, `dynamic_evidence`, and `timestamp`.
+Set `ordinal` to the current overall Bug Validator job attempt supplied by the
+Coordinator. Its `dynamic_evidence.reproduction_result` must name exactly that
+attempt's immutable result; a report from a prior negative probe is not a valid
+finalization for a retry.
 `dynamic_evidence` is exactly:
 
 ```json

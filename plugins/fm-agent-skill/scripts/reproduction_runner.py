@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -22,6 +21,12 @@ from fm_agent_core.languages import profile_for_key
 
 
 MAX_OUTPUT_BYTES = 16_000
+# A runtime under a user home directory is deliberately not allowed: binding a
+# parent directory to make it executable would reintroduce host-secret reads.
+# Deployments that need Node/Cargo/tsx must provide them in this dedicated,
+# non-user-owned runtime prefix or in one of the system prefixes below.
+SAFE_RUNTIME_ROOTS = (Path("/usr/bin"), Path("/usr/local/bin"), Path("/usr/local/go"), Path("/opt/fm-agent-runtime"))
+SAFE_READONLY_DIRS = (Path("/usr"), Path("/lib"), Path("/lib64"), Path("/opt/fm-agent-runtime"))
 
 
 def attempt_dir(target: Path, bug_id: str, attempt: int) -> Path:
@@ -118,16 +123,41 @@ def command_for(target: Path, root: Path, contract: dict, scratch: Path) -> tupl
 
 
 def sandbox_command(target: Path, scratch: Path, command: list[str]) -> list[str]:
-    """Execute from a read-only project view with no network and a fresh /tmp."""
+    """Build a fail-closed Bubblewrap command without exposing host root/home."""
     bwrap = shutil.which("bwrap")
     if not bwrap: raise AdapterUnavailable("bubblewrap is required; unsafe probe execution is intentionally disabled")
+    executable = Path(command[0]).resolve()
+    if not executable.is_file() or not any(executable.is_relative_to(root) for root in SAFE_RUNTIME_ROOTS):
+        raise AdapterUnavailable(
+            "approved runtime must be installed below /usr/bin, /usr/local/bin, "
+            "/usr/local/go, or /opt/fm-agent-runtime; user-home runtimes are not mounted"
+        )
     scratch.mkdir(parents=True, exist_ok=True)
-    return [
-        bwrap, "--die-with-parent", "--new-session", "--unshare-net",
-        "--ro-bind", "/", "/", "--dir", "/project", "--ro-bind", str(target), "/project",
-        "--bind", str(scratch), "/tmp", "--proc", "/proc", "--dev", "/dev", "--chdir", "/project", "--",
+    mounts = [item for item in SAFE_READONLY_DIRS if item.is_dir()]
+    result = [bwrap, "--die-with-parent", "--new-session", "--unshare-net", "--unshare-pid", "--clearenv"]
+    # Mount only system runtime trees.  Never mount /, /home, or the host's
+    # configuration directories.  Dynamic-loader data is supplied by /lib*.
+    mounted = []
+    for directory in mounts:
+        parent_is_available = directory.parent == Path("/") or any(
+            directory.parent == prior or directory.parent.is_relative_to(prior) for prior in mounted
+        )
+        if not parent_is_available:
+            result += ["--dir", str(directory.parent)]
+        result += ["--ro-bind", str(directory), str(directory)]
+        mounted.append(directory)
+    result += [
+        "--dir", "/project", "--ro-bind", str(target), "/project",
+        # scratch is created by the Coordinator below this attempt only.  It is
+        # the sole writable mount and must remain visible to adapters such as
+        # Cargo that prepare a controlled runner under /tmp.
+        "--bind", str(scratch), "/tmp", "--proc", "/proc", "--dev", "/dev", "--chdir", "/project",
+        "--setenv", "HOME", "/tmp/home", "--setenv", "TMPDIR", "/tmp",
+        "--setenv", "PATH", "/usr/bin:/usr/local/bin:/usr/local/go/bin:/opt/fm-agent-runtime",
+        "--",
         *command,
     ]
+    return result
 
 
 def output_classification(stdout: str, returncode: int) -> tuple[str, str]:
@@ -164,14 +194,20 @@ def run(target: Path, bug_id: str, attempt: int) -> dict:
         scratch = root / "sandbox"
         inner_command, adapter_env = command_for(target, root, contract, scratch)
         command = sandbox_command(target, scratch, inner_command)
-        environment = {"PATH": os.environ.get("PATH", ""), "HOME": "/tmp/home", "TMPDIR": "/tmp", **adapter_env}
+        # Bubblewrap clears the inherited host environment; only adapter values
+        # are reintroduced as explicit --setenv arguments below.
+        sandbox_env = []
+        for key, value in adapter_env.items():
+            sandbox_env += ["--setenv", key, value]
+        marker = command.index("--")
+        command = [*command[:marker], *sandbox_env, *command[marker:]]
         result["command"] = command
-        result["sandbox"] = {"engine": "bubblewrap", "network": "disabled", "project": "read-only", "tmp": "private"}
+        result["sandbox"] = {"engine": "bubblewrap", "network": "disabled", "project": "read-only", "tmp": "private", "host_root": "not-mounted", "host_home": "not-mounted"}
         try:
-            completed = subprocess.run(command, cwd=target, text=True, capture_output=True, timeout=contract["timeout_seconds"], env=environment)
+            completed = subprocess.run(command, cwd=target, text=True, capture_output=True, timeout=contract["timeout_seconds"], env={})
             stdout, stderr = completed.stdout[-MAX_OUTPUT_BYTES:], completed.stderr[-MAX_OUTPUT_BYTES:]
             classification, reason = output_classification(stdout, completed.returncode)
-            result.update({"state": "completed", "classification": classification, "reason": reason, "returncode": completed.returncode, "stdout": stdout, "stderr": stderr})
+            result.update({"state": "execution_error" if classification == "runtime_error" else "completed", "classification": classification, "reason": reason, "returncode": completed.returncode, "stdout": stdout, "stderr": stderr})
         except FileNotFoundError as exc:
             result.update({"state": "execution_error", "classification": "runtime_error", "reason": f"required command is unavailable: {exc}", "returncode": 127, "stdout": "", "stderr": ""})
         except subprocess.TimeoutExpired as exc:

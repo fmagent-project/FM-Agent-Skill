@@ -44,14 +44,34 @@ For each candidate and attempt:
    `reproduction_result.json`, then call `scheduler.py complete` with the
    matching classification.
 
+The final report's last `attempts[]` item must have `ordinal` equal to the
+current overall job attempt and must point at that exact attempt's
+`reproduction_result.json`. A prior negative report never completes a retried
+probe; the host state machine requests finalization again until the current
+dynamic evidence is appended.
+
 The runner accepts no Agent-provided command. It executes only an approved
-ecosystem adapter and, when Bubblewrap is available, uses a read-only project
-mount, private temporary directory, timeout, and disabled network. Python,
+ecosystem adapter inside Bubblewrap with a read-only project mount, private
+temporary directory, timeout, disabled network, cleared environment, and no
+mount of `/`, `/home`, or host configuration directories. Runtime binaries must
+be provisioned under an approved system/runtime prefix; a runtime under a user
+home directory is `unsupported`, rather than making that home visible. Python,
 JavaScript, Go, and Cargo/Rust have Coordinator-owned adapters; TypeScript needs
 the approved `tsx` runtime. Java (Maven/Gradle), C/C++ (CMake), CUDA, ArkTS and
 ELP remain intentionally `unsupported` until their dedicated adapter validates
 its project metadata and public entrypoint. Never substitute a guessed shell
 command or run unsandboxed merely to improve coverage.
+
+## Host-coordinated state machine
+
+The dynamic lifecycle is driven by `bug_validation_executor.py`, not a manual
+sequence of ad-hoc runner calls. It never invokes an Agent itself. Instead it
+returns an exact `host_worker` request for the active Codex/Claude Coordinator
+at the preparation and finalization boundaries. The Coordinator must invoke the
+named Worker through its native subagent mechanism, then return its compact
+receipt to the state machine. The state machine owns admission, contract
+validation, optional build evidence, sandbox execution, retry/requeue, receipt
+validation, and the terminal summary.
 
 The probe must be self-contained, avoid network access and unrelated file I/O,
 use a public entry point rather than an internal module, catch errors, and print

@@ -334,37 +334,25 @@ first direct candidate, detect and record the safe build adapter:
   --project "$PROJECT"
 ```
 
-For every launch of a Bug Validator job, pass its current overall job attempt
-as `--attempt`; this makes a retry immutable even when it is retrying the same
-negative validation index. First invoke the worker's preparation pass, validate
-its `reproduction.json` and `probe.<ext>`, then optionally collect build
-evidence:
+For every Bug Validator job, use the host-coordinated deterministic state
+machine; do not manually sequence its preparation, runner, finalization, or
+summary scripts. A manifest must include `input.bug_id` and `input.mode`. After
+the normal scheduler admission, call:
 
 ```bash
-<python3> "$FM_AGENT_SKILL_ROOT/scripts/probe_runner.py" run \
-  --project "$PROJECT" --bug-id "$BUG_ID" --attempt "$JOB_ATTEMPT"
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/bug_validation_executor.py" start \
+  --project "$PROJECT" --job-id "$JOB_ID"
 ```
 
-Then execute the worker-designed probe only through the fixed dynamic runner:
-
-```bash
-<python3> "$FM_AGENT_SKILL_ROOT/scripts/reproduction_runner.py" run \
-  --project "$PROJECT" --bug-id "$BUG_ID" --attempt "$JOB_ATTEMPT"
-```
-
-If that runner reports `execution_error`, fail the job as `execution`; do not
-ask the worker for a semantic result. Otherwise invoke its finalization pass
-with the immutable `reproduction_result.json`, then complete the job using that
-same classification. `build_result.json` can never confirm or reject a defect.
-Do not pass arbitrary commands to either runner. Read
+It returns exactly one next action. On `host_worker`, invoke only the named
+`fm-bug-validate-worker` pass through Codex/Claude's native subagent mechanism.
+After preparation, call `next`; on `run_dynamic`, call `run-dynamic`; after
+finalization, submit its compact receipt with `submit-finalization
+--receipt-json ...`. Runtime errors requeue through the same state machine;
+terminal phase summaries are written by it after all Bug Validator jobs finish.
+The state machine never invokes FM-Agent, an LLM API, or a shell command chosen
+by a Worker. `build_result.json` can never confirm or reject a defect. Read
 [bug-validation.md](../../references/bug-validation.md) for the full contract.
-After every current candidate has a terminal report, write the Coordinator-owned
-summary before the phase gate:
-
-```bash
-<python3> "$FM_AGENT_SKILL_ROOT/scripts/bug_summary.py" \
-  --project "$PROJECT" --mode "$MODE"
-```
 
 Only after every phase gate succeeds may the agent call `pipeline.py complete`
 and release the lock as `idle`. Never modify business source or extracted
