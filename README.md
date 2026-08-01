@@ -43,6 +43,9 @@ no-op detection, and explicit safe resume of interrupted analyses.
   record an `agent-static` best-effort fallback when it is unavailable.
 - Run same-layer semantic workers concurrently with explicit write ownership,
   persisted job state, same-job bounded retries, and phase gates.
+- Materialize the complete specification/verification/Bug Validator queue
+  before workers run, so an early batch failure cannot erase later work from
+  the scheduler's scope.
 
 ## Prerequisites
 
@@ -133,6 +136,13 @@ terminal per-function reasoning result; a malformed structured reasoner output
 is retried as an output failure. Bug Validator retries
 runtime failures up to five attempts and repeats a completed negative result
 twice by default, preserving all three probes.
+
+Specification JSON uses a closed seven-field schema. Observable failure and
+exception behavior belongs in `post_condition`; identity, phase, summary, and
+`error_behavior` convenience fields are rejected with a field-level scheduler
+message and repaired by the same job. A failed phase never falls back to a
+static-audit result. The original worktree receives a small failure receipt,
+and `diagnose.py` reports that no official result exists until all gates pass.
 
 Bug validation has two deliberately separate surfaces. `probe_runner.py` is a
 language-profile-selected build or syntax check and is never behavioral proof.

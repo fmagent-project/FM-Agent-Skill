@@ -27,7 +27,9 @@ On resume, first announce the existing run and its recovery point:
 After a successful phase, state that it completed, then announce the next
 stage before starting it. For a no-op, report that no analysis stages ran and
 identify the retained baseline. On failure or a user stop, state the last
-completed phase and the phase that did not finish.
+completed phase and the phase that did not finish. Do not append a substitute
+static bug list. Explicitly say that verification and Bug Validation results do
+not exist when those gates were not reached.
 
 | Mode | Ordered phase ids and labels |
 | --- | --- |

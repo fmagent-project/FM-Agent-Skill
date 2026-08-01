@@ -41,7 +41,10 @@ def baseline_ready(target, submodules):
 
 def bug_validation_current(target, mode):
     candidates = direct_mismatch_ids(target, mode)
-    return state.bug_validation_ready(target, candidates)
+    plan_ok, plan_reason = state.semantic_job_plan_ready(target, "bug_validation", candidate_ids=candidates)
+    if not plan_ok:
+        return False, plan_reason
+    return (True, "") if not candidates else state.bug_validation_ready(target, candidates)
 
 
 def call_graph_ready(target):
@@ -54,17 +57,29 @@ def call_graph_ready(target):
         and state.phase_layers_ready(target)[0]
     )
 
+
+def all_ready(*checks):
+    for check in checks:
+        if isinstance(check, tuple):
+            if not check[0]:
+                return False, check[1]
+        elif not check:
+            return False, "required artifact is missing or invalid"
+    return True, ""
+
 def validate(target, mode, phase, submodules):
     fm = state.fm_dir(target)
+    scoped = state.scoped_functions(target, submodules)
+    selected = selected_functions(target)
     checks = {
         "preflight": lambda: state.preflight(target)["ok"],
         "project_understanding": lambda: state.phases_schema_ready(target)[0],
         "phase_cleanup": lambda: state.phases_schema_ready(target)[0],
         "extraction": lambda: bool(state.scoped_functions(target, submodules)),
         "call_graph": lambda: call_graph_ready(target),
-        "specification": lambda: state.specification_context_ready(target)[0] and state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
-        "verification": lambda: state.function_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0],
-        "bug_validation": lambda: (not direct_mismatch_ids(target, mode)) or bug_validation_current(target, mode)[0],
+        "specification": lambda: all_ready(state.semantic_job_plan_ready(target, "specification", scoped), state.specification_context_ready(target), state.specification_artifacts_ready(target, scoped, submodules)),
+        "verification": lambda: all_ready(state.semantic_job_plan_ready(target, "verification", scoped), state.function_artifacts_ready(target, scoped, submodules)),
+        "bug_validation": lambda: bug_validation_current(target, mode),
         "finalize": lambda: True,
         "validate_baseline": lambda: baseline_ready(target, submodules),
         "refresh_plan": lambda: state.phases_schema_ready(target)[0],
@@ -72,14 +87,22 @@ def validate(target, mode, phase, submodules):
         "diff": lambda: (state.control_dir(target) / "diff.json").is_file(),
         "rebuild_graph": lambda: call_graph_ready(target),
         "select_scope": lambda: selection_ready(target),
-        "update_specs": lambda: state.specification_context_ready(target)[0] and state.specification_artifacts_ready(target, state.scoped_functions(target, submodules), submodules)[0] and (fm / "incremental_updated_specs.json").is_file(),
-        "verify_affected": lambda: selection_ready(target) and state.selected_verification_ready(target, selected_functions(target))[0],
+        "update_specs": lambda: all_ready(state.specification_context_ready(target), state.specification_artifacts_ready(target, scoped, submodules), ((fm / "incremental_updated_specs.json").is_file(), "missing incremental specification update record")),
+        "verify_affected": lambda: all_ready((selection_ready(target), "missing incremental selection"), state.semantic_job_plan_ready(target, "verify_affected", selected), state.selected_verification_ready(target, selected)),
     }
     check = checks.get(phase)
     if check is None: return {"ok": False, "reason": f"unknown {mode} phase: {phase}"}
-    try: ok = bool(check()) and state.snapshot_sources_clean(target)
-    except OSError: ok = False
-    return {"ok": ok, "phase": phase, "reason": "" if ok else f"required artifacts for {phase} are missing, invalid, or the snapshot source changed"}
+    try:
+        outcome = check()
+        if isinstance(outcome, tuple):
+            ok, reason = bool(outcome[0]), outcome[1]
+        else:
+            ok, reason = bool(outcome), ""
+        if ok and not state.snapshot_sources_clean(target):
+            ok, reason = False, "snapshot production source changed during analysis"
+    except OSError as exc:
+        ok, reason = False, str(exc)
+    return {"ok": ok, "phase": phase, "reason": "" if ok else (reason or f"required artifacts for {phase} are missing or invalid")}
 
 
 def main():

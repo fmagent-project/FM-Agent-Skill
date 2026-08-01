@@ -11,6 +11,24 @@ assigned artifact, write exactly
 `<artifact>.spec.json` using specification schema version 2, and
 `<artifact>.info.json` with `callees`.
 
+The spec JSON object has exactly these seven fields and no others:
+
+```json
+{"schema_version":2,"signature":"...","pre_condition":"...","post_condition":"...","normative_evidence":[],"observations":[],"confidence":"high|low"}
+```
+
+Never add `error_behavior`, `throws`, `exceptions`, `notes`, or another
+convenience field. Put observable rejection, exception, sentinel, and failure
+behavior in `post_condition`. Before returning, reopen each assigned JSON file
+and confirm that its key set exactly matches this template. The info JSON is
+exactly `{"callees":[]}` with zero or more exact callee objects inside the
+array; it has no other top-level field.
+
+On retry, consume the Coordinator's exact scheduler validation message. Reopen
+only the assigned sidecars named by that message, preserve any assigned pair
+that already validates, and correct the reported missing or unsupported fields
+before reconsidering semantic content.
+
 Treat constants, comparisons, and formulas in the implementation as hypotheses
 only. Generated system/domain context is observational and cannot establish a
 contract. A high-confidence rule needs an exact quote from copied user

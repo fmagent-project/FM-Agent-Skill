@@ -240,6 +240,23 @@ knowledge inputs deterministically:
 If this rejects a changed or missing knowledge file, fail the phase. Workers
 may cite user requirements only through the resulting manifest-bound copies.
 
+Then create the complete phase queue in one deterministic operation:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/job_planner.py" \
+  --project "$PROJECT" --phase "$PHASE"
+```
+
+Use it for full `specification`, full `verification`, incremental
+`verify_affected`, and `bug_validation`. Incremental `update_specs` retains its
+read-only plan/apply/reconcile workflow described below. For specification it registers every
+selected function across every project phase and caller-first layer before the
+first Worker starts, splitting by `spec_batch_size` (default one). For later
+phases it registers every selected function or direct candidate. Do not create
+these jobs manually or defer creation of later layers. The resulting
+`fm_agent_skill/control/job_plans/<phase>.json` must cover the entire current
+scope before that phase gate can pass.
+
 For each specification job, provide only the assigned extracted artifacts and
 permitted user-requirement, public-API, and caller-contract evidence. Generated
 domain context is observation-only. Do not read test files. Require
@@ -276,7 +293,11 @@ class; if its status is `retryable`, wait 10 seconds and call
 `retries`. For a spec layer with any newly valid sidecar, retry remaining
 batches immediately; wait 10 seconds only when it made no progress. A retried
 spec batch preserves valid paired sidecars and repairs only incomplete assigned
-artifacts. A verification-level failure is a valid `ERROR` result, not a retry;
+artifacts. Pass the exact scheduler `message` to the retried Worker. For schema
+errors, instruct it to reopen only the named assigned sidecar, remove every
+reported unsupported key, add every reported missing key, and recheck the
+closed seven-field schema before returning. Never restart all specification
+jobs because one batch failed. A verification-level failure is a valid `ERROR` result, not a retry;
 retry only when the Agent or result artifact itself failed. In default
 `agent-executed` mode, a Bug Validator job uses Worker preparation, execution,
 and finalization passes; optional `adapter` mode uses the Coordinator-owned
@@ -390,6 +411,15 @@ function copies; write specifications only to their `.spec.json` and
 capabilities documented by this Skill's shared instructions and references; do not
 infer features from the original FM-Agent project.
 
+If any phase exhausts its retries or fails its gate, the FM-Agent analysis is
+incomplete. Record `phase-fail`, call `pipeline.py fail`, and stop the analysis
+workflow. Do not switch to direct source auditing, ad-hoc bug hunting, manual
+test execution, or an alternative report in the same run. Such observations
+would not have passed specification, verification, and Bug Validator gates and
+must never be presented as FM-Agent findings. The final response for a failed
+run contains only the completed phase, failed phase, exact scheduler/gate
+reason, retained resume location, and `--resume` instruction.
+
 Build the final user report only from validated current-run artifacts. A
 function may appear under confirmed bugs only when its direct `MISMATCH` has a
 `bug_validation/*.result.json` whose status is `confirmed` and whose latest
@@ -398,3 +428,8 @@ implementation observations, source comments, benchmark manifests, or host
 suspicions as discovered bugs. If there are no direct `MISMATCH` results,
 report zero candidates and zero confirmed bugs; external benchmark ground
 truth belongs in a separate evaluator section.
+
+Immediately before any terminal user report, run `diagnose.py --project` on the
+original user worktree and inspect `result_authority`. Report FM-Agent findings
+only when `official_result_available` is true. If it is false, report the run as
+incomplete even if the Coordinator has independently noticed plausible defects.

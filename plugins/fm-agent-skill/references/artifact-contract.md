@@ -57,6 +57,13 @@ All mutable Skill state lives under `fm_agent_skill/`.
   control artifacts. Active analysis state, locks, scheduler jobs, build profiles, and probe results also belong in
   `fm_agent_skill/`, never in `fm_agent/`. Only the Coordinator and
   deterministic scripts may write Skill-owned control state.
+- `fm_agent_skill/control/job_plans/<phase>.json` is the current-snapshot,
+  deterministic full-scope queue manifest. Specification, verification, and
+  Bug Validation gates reject a missing, stale, partial, or hand-divergent plan.
+- `fm_agent_skill/failure.json` is a small failure receipt copied to the user's
+  worktree when an isolated run fails. It never promotes private semantic
+  artifacts; it records that no official result exists and where resume state
+  was retained.
 
 ## Sidecar schemas
 
@@ -74,6 +81,10 @@ User requirements quote the copied files under
 `domain_context/user_knowledge/`; public API contracts quote non-generated
 documentation or source comments. Oracle markers such as `BUG:`, `FIXME:`,
 `TODO:`, seeded bugs, and known defects are rejected as normative evidence.
+
+The seven-key object is a closed schema: extra keys are invalid. Encode
+observable error, exception, rejection, and sentinel behavior inside
+`post_condition`; do not add an `error_behavior` field.
 
 `<function>.<ext>.info.json` is exactly `{"callees": [...]}`. Every callee is
 an object with string fields `name`, `signature`, `pre_condition`, and

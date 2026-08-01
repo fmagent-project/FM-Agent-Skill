@@ -10,7 +10,7 @@ from pathlib import Path
 
 from _common import project, state
 from config import DEFAULTS, load
-from isolation import create as create_snapshot, discard as discard_snapshot, marker as snapshot_marker
+from isolation import clear_failure, create as create_snapshot, discard as discard_snapshot, marker as snapshot_marker
 from locking import acquire, reclaim_for_resume, release
 
 
@@ -102,6 +102,7 @@ def main():
     preview = inspect(source_target, args)
     if not preview["ok"]: print(json.dumps(preview, ensure_ascii=False, indent=2)); raise SystemExit(2)
     if preview["mode"] == "noop":
+        clear_failure(source_target)
         record = {"schema_version": 2, "mode": "noop", "status": "noop", "started_at": state.now(), "ended_at": state.now(), "fingerprint": preview["baseline"]["saved"]["fingerprint"], "inputs": preview["baseline"]["saved"]["inputs"], "baseline_commit": preview["baseline"]["commit"]}
         state.atomic_json(state.skill_dir(source_target) / "active.json", record)
         print(json.dumps({"ok": True, "mode": "noop", "project": str(source_target), "baseline": preview["baseline"], "config": preview["config"], "analysis": record}, ensure_ascii=False, indent=2)); return

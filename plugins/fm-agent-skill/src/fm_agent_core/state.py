@@ -325,25 +325,49 @@ def _valid_evidence_item(item, kinds: set[str]) -> bool:
     )
 
 
-def _valid_spec(data) -> bool:
-    if not isinstance(data, dict) or set(data) != SPEC_FIELDS:
-        return False
+def _spec_schema_ready(data) -> tuple[bool, str]:
+    """Validate the exact sidecar schema and return an actionable error.
+
+    Spec workers are intentionally not allowed to invent convenience fields.
+    In particular, exceptional behavior belongs in ``post_condition`` rather
+    than a parallel ``error_behavior`` field that downstream consumers do not
+    understand.
+    """
+    if not isinstance(data, dict):
+        return False, "spec sidecar must be a JSON object"
+    actual = set(data)
+    if actual != SPEC_FIELDS:
+        missing = sorted(SPEC_FIELDS - actual)
+        extra = sorted(actual - SPEC_FIELDS)
+        details = []
+        if missing:
+            details.append("missing fields: " + ", ".join(missing))
+        if extra:
+            details.append("unsupported fields: " + ", ".join(extra))
+        return False, "spec sidecar fields must match schema exactly (" + "; ".join(details) + ")"
     if data.get("schema_version") != 2:
-        return False
-    if not all(isinstance(data[field], str) for field in ("signature", "pre_condition", "post_condition")):
-        return False
+        return False, "spec sidecar schema_version must be 2"
+    if not all(isinstance(data[field], str) and data[field].strip() for field in ("signature", "pre_condition", "post_condition")):
+        return False, "signature, pre_condition, and post_condition must be non-empty strings"
     normative = data.get("normative_evidence")
     observations = data.get("observations")
     if not isinstance(normative, list) or not all(_valid_evidence_item(item, NORMATIVE_EVIDENCE_KINDS) for item in normative):
-        return False
+        return False, "normative_evidence must contain only exact schema-v2 evidence objects"
     if not isinstance(observations, list) or not all(_valid_evidence_item(item, OBSERVATION_KINDS) for item in observations):
-        return False
+        return False, "observations must contain only exact implementation evidence objects"
     confidence = data.get("confidence")
     if confidence not in SPEC_CONFIDENCE:
-        return False
+        return False, "confidence must be high or low"
     if confidence == "high":
-        return bool({item["kind"] for item in normative} & ROOT_NORMATIVE_EVIDENCE_KINDS)
-    return not normative and bool(observations)
+        if not ({item["kind"] for item in normative} & ROOT_NORMATIVE_EVIDENCE_KINDS):
+            return False, "high confidence requires user_requirement or public_api_contract evidence"
+    elif normative or not observations:
+        return False, "low confidence requires empty normative_evidence and at least one implementation observation"
+    return True, ""
+
+
+def _valid_spec(data) -> bool:
+    return _spec_schema_ready(data)[0]
 
 
 def _project_for_artifact(artifact: Path) -> Path | None:
@@ -508,8 +532,9 @@ def sidecars_ready(artifact: Path) -> tuple[bool, str]:
         return False, "extracted source contains inline specification metadata"
     spec_path, info_path = Path(f"{artifact}.spec.json"), Path(f"{artifact}.info.json")
     spec, info = read_json(spec_path, None), read_json(info_path, None)
-    if not _valid_spec(spec):
-        return False, f"missing or invalid spec sidecar: {spec_path.name}"
+    spec_ok, spec_reason = _spec_schema_ready(spec)
+    if not spec_ok:
+        return False, f"invalid spec sidecar {spec_path.name}: {spec_reason}"
     evidence_ok, evidence_reason = _spec_evidence_ready(artifact, spec)
     if not evidence_ok:
         return False, f"invalid specification evidence: {evidence_reason}"
@@ -560,6 +585,42 @@ def specification_artifacts_ready(project: Path, functions: list[dict], submodul
     stale_artifacts = actual_artifacts - expected_artifacts
     if stale_artifacts:
         return False, f"stale extracted artifact: {sorted(stale_artifacts)[0]}"
+    return True, ""
+
+
+def semantic_job_plan_ready(project: Path, phase: str, functions: list[dict] | None = None, candidate_ids: set[str] | None = None) -> tuple[bool, str]:
+    """Require deterministic queue coverage before a semantic phase can pass."""
+    plan = read_json(control_dir(project) / "job_plans" / f"{phase}.json", None)
+    if not isinstance(plan, dict) or set(plan) != {"schema_version", "phase", "snapshot_commit", "entries", "created_jobs", "total_entries"}:
+        return False, f"missing or invalid deterministic job plan for {phase}"
+    if plan.get("schema_version") != 1 or plan.get("phase") != phase or plan.get("snapshot_commit") != current_snapshot_commit(project):
+        return False, f"stale deterministic job plan for {phase}"
+    entries = plan.get("entries")
+    if not isinstance(entries, list) or plan.get("total_entries") != len(entries) or not isinstance(plan.get("created_jobs"), int):
+        return False, f"invalid deterministic job plan counts for {phase}"
+    artifact_phases = {"specification", "verification", "verify_affected"}
+    identity_key = "artifact" if phase in artifact_phases else "function_id"
+    expected = ({item.get("artifact") for item in functions or []} if identity_key == "artifact" else set(candidate_ids or set()))
+    actual = set()
+    expected_type = "spec_batch" if phase == "specification" else "verify_function" if phase in {"verification", "verify_affected"} else "bug_validate"
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {identity_key, "job_id"} or not isinstance(entry.get(identity_key), str):
+            return False, f"invalid entry in deterministic job plan for {phase}"
+        identity, job_id = entry[identity_key], entry["job_id"]
+        if identity in actual or job_id is not None and not isinstance(job_id, str):
+            return False, f"duplicate or invalid entry in deterministic job plan for {phase}"
+        actual.add(identity)
+        if job_id is None:
+            continue
+        job = read_json(skill_dir(project) / "jobs" / f"{job_id}.json", None)
+        if not isinstance(job, dict) or job.get("id") != job_id or job.get("phase") != phase or job.get("type") != expected_type:
+            return False, f"job plan references an invalid job: {job_id}"
+        if identity_key == "artifact" and identity not in job.get("artifacts", []):
+            return False, f"job {job_id} does not own planned artifact {identity}"
+        if identity_key == "function_id" and job.get("input", {}).get("function_id") != identity:
+            return False, f"job {job_id} does not own planned function {identity}"
+    if actual != expected:
+        return False, f"deterministic job plan for {phase} does not cover the current scope"
     return True, ""
 
 

@@ -7,7 +7,7 @@ import json
 
 from _common import common_scope, project, scope, state
 from locking import heartbeat, release
-from isolation import sync as sync_isolation
+from isolation import clear_failure, publish_failure, sync as sync_isolation
 from reset_full_artifacts import clear_transient, reset, reset_incremental_artifacts
 from stage_gate import validate
 
@@ -92,7 +92,9 @@ def main():
         elif args.action == "fail": record.update({"status": "failed", "ended_at": state.now(), "failure": args.message})
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})
     record["updated_at"] = state.now(); save(target, record)
+    if args.action in {"phase-fail", "fail"}: publish_failure(target, record)
     if args.action in {"resume", "phase-start", "phase-complete"}: heartbeat(target)
+    if args.action == "resume": clear_failure(target)
     if args.action == "complete":
         clear_transient(target); release(target, "idle"); sync_isolation(target)
     elif args.action == "fail":

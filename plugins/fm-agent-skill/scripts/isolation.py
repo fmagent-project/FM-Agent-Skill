@@ -21,6 +21,7 @@ from fm_agent_core.languages import profile_for_key
 
 
 MARKER = "isolation.json"
+FAILURE_RECEIPT = "failure.json"
 ACTIVE_REF = "refs/fm-agent-skill/active"
 BASELINE_REF = "refs/fm-agent-skill/baseline"
 GENERATED_DIRS = ("fm_agent", "fm_agent_skill", ".codegraph")
@@ -37,6 +38,47 @@ def marker_path(target: Path) -> Path:
 
 def marker(target: Path) -> dict:
     return state.read_json(marker_path(target), {})
+
+
+def _source_for(target: Path) -> Path:
+    data = marker(target)
+    source = data.get("source_project") if isinstance(data, dict) else None
+    return Path(source) if isinstance(source, str) and Path(source).is_dir() else target
+
+
+def clear_failure(target: Path) -> None:
+    (state.skill_dir(_source_for(target)) / FAILURE_RECEIPT).unlink(missing_ok=True)
+
+
+def publish_failure(target: Path, record: dict) -> dict:
+    """Persist a small failure receipt in the user's worktree.
+
+    Semantic artifacts remain private in the resumable snapshot.  This receipt
+    prevents a missing temporary worktree from erasing the fact that the
+    official pipeline did not complete.
+    """
+    source = _source_for(target)
+    phases = record.get("phases", []) if isinstance(record, dict) else []
+    completed = [
+        phase for phase in phases
+        if record.get("phase_status", {}).get(phase, {}).get("status") == "succeeded"
+    ]
+    data = marker(target)
+    snapshot = data.get("snapshot") if isinstance(data, dict) else str(target)
+    receipt = {
+        "schema_version": 1,
+        "status": "failed",
+        "official_result_available": False,
+        "snapshot": snapshot,
+        "snapshot_available": isinstance(snapshot, str) and Path(snapshot).is_dir(),
+        "snapshot_commit": record.get("snapshot_commit"),
+        "last_completed_phase": completed[-1] if completed else None,
+        "failed_phase": record.get("current_phase"),
+        "reason": record.get("failure") or record.get("phase_status", {}).get(record.get("current_phase"), {}).get("message") or "analysis failed",
+        "updated_at": state.now(),
+    }
+    state.atomic_json(state.skill_dir(source) / FAILURE_RECEIPT, receipt)
+    return receipt
 
 
 def _run(target: Path, *args: str, env: dict | None = None) -> str:
@@ -264,6 +306,7 @@ def create(target: Path) -> dict:
         _copy_outputs(target, snapshot)
         arkts_dependencies = _hydrate_arkts_dependencies(target, snapshot)
         data = {"schema_version": 3, "source_project": str(target), "snapshot": str(snapshot), "snapshot_commit": commit, "created_at": state.now(), "arkts_dependencies": arkts_dependencies}
+        clear_failure(target)
         state.atomic_json(marker_path(target), data)
         state.atomic_json(marker_path(snapshot), data)
         return data
@@ -298,6 +341,7 @@ def sync(snapshot: Path) -> dict:
         if destination.exists(): shutil.rmtree(destination)
         shutil.copytree(origin, destination, symlinks=True)
     marker_path(source).unlink(missing_ok=True)
+    (state.skill_dir(source) / FAILURE_RECEIPT).unlink(missing_ok=True)
     _run(source, "update-ref", "-d", ACTIVE_REF)
     _remove(snapshot, source)
     return {"synced": True, "source_project": str(source), "baseline_commit": commit}

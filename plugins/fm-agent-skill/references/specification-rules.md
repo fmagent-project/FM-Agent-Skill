@@ -59,6 +59,11 @@ the specification phase, challenge every precondition: "would this exclude a
 bad input that a caller can actually pass?" If yes, remove or weaken the
 precondition and specify the failure behavior instead.
 
+Failure behavior belongs inside `post_condition`; it is not a separate sidecar
+field. The seven-key spec schema is closed. Never emit `error_behavior`,
+`throws`, `exceptions`, `notes`, or another top-level key. A sidecar containing
+one must be repaired by the same specification job before its receipt can pass.
+
 Keep every extracted function copy byte-for-byte equivalent to its extracted
 source. Store its contract in paired sidecars instead:
 

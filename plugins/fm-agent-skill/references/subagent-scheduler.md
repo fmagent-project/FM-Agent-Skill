@@ -7,8 +7,11 @@ control state, phase transitions, lock heartbeats, and user-visible status.
 
 ## Job lifecycle
 
-For each semantic job, the Coordinator calls `scheduler.py create` with its
-pipeline `phase`, then obtains `scheduler.py admissible`. For each returned
+At the start of specification, verification, or Bug Validation, the
+Coordinator calls `job_planner.py` once for the current pipeline phase. It
+creates every job in the current scope before execution; the Coordinator does
+not hand-author semantic manifests or postpone later specification layers.
+Then obtain `scheduler.py admissible`. For each returned
 job, call `scheduler.py start` **before** invoking the host subagent. `start`
 is the admission point: it atomically rejects a job when its global or
 type-specific capacity is full. Never launch a worker merely because it was
@@ -30,7 +33,10 @@ Retain the same job id for retries. `execution`, `output`, and `interrupted`
 failures use `scheduler.py fail`; if retryable, call `scheduler.py retry` after
 10 seconds, up to configured `retries`. For a specification layer, retry
 remaining batches immediately when any paired sidecar became valid; otherwise
-wait 10 seconds. `input`, `semantic`, and `cancelled` are terminal. A semantic
+wait 10 seconds. Feed the scheduler's exact validation `message` back to the
+same Worker and repair only its assigned invalid sidecars. Unknown or missing
+closed-schema fields are an `output` failure; they are not a reason to abandon
+other batches or bypass the phase. `input`, `semantic`, and `cancelled` are terminal. A semantic
 verification error is a valid `ERROR` result, not a retry. A Bug Validator job
 has worker preparation, execution, and finalization passes in the default
 `agent-executed` mode; the optional `adapter` mode retains Coordinator-owned
