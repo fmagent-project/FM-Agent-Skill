@@ -18,6 +18,14 @@ from typing import Iterable
 
 
 @dataclass(frozen=True)
+class DependencyHydration:
+    """A project-local ignored dependency tree safe to copy into a snapshot."""
+
+    directory_name: str
+    lockfile_names: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class LanguageProfile:
     key: str
     display_name: str
@@ -31,15 +39,22 @@ class LanguageProfile:
     requires_build_metadata: bool
     build_adapter: str | None
     dynamic_adapter: str | None
+    agent_execution_ecosystems: tuple[str, ...]
+    dependency_hydration: DependencyHydration | None
     support_level: str
 
 
 def _profile(key, display_name, extensions, codegraph=(), treesitter=(), probe=None,
-             detectors=(), required_metadata=False, build_adapter=None, dynamic_adapter=None, level="static_only", extractor="codegraph-then-tree-sitter") -> LanguageProfile:
+             detectors=(), required_metadata=False, build_adapter=None, dynamic_adapter=None, level="static_only", extractor="codegraph-then-tree-sitter", agent_ecosystems=None, dependency_hydration=None) -> LanguageProfile:
+    # The main Skill follows FM-Agent's one generic Bug Validator path. A
+    # Worker selects the concrete project toolchain only after it has inspected
+    # the public entry point; fixed language adapters are reserved for the
+    # optional restricted execution mode.
+    agent_ecosystems = ("host-project-toolchain",) if agent_ecosystems is None else agent_ecosystems
     return LanguageProfile(
         key, display_name, frozenset(extensions), tuple(codegraph), tuple(treesitter),
         extractor, "structured-public-entrypoint", probe,
-        tuple(detectors), required_metadata, build_adapter, dynamic_adapter, level,
+        tuple(detectors), required_metadata, build_adapter, dynamic_adapter, tuple(agent_ecosystems), dependency_hydration, level,
     )
 
 
@@ -49,11 +64,19 @@ PROFILES: tuple[LanguageProfile, ...] = (
     _profile("typescript", "TypeScript", {".ts", ".tsx", ".mts", ".cts"}, ("typescript", "tsx"), ("typescript", "tsx"), ".ts", ("tsconfig.json",), True, "typescript", "node-typescript", "full"),
     _profile("go", "Go", {".go"}, ("go",), ("go",), ".go", ("go.mod",), True, "go", "go-modules", "full"),
     _profile("rust", "Rust", {".rs"}, ("rust",), ("rust",), ".rs", ("Cargo.toml", "Cargo.lock"), True, "cargo", "cargo", "full"),
-    _profile("java", "Java", {".java"}, ("java",), ("java",), ".java", ("pom.xml", "build.gradle", "build.gradle.kts"), False, "java", None, "static_only"),
-    _profile("c", "C", {".c"}, ("c",), ("c",), ".c", ("CMakeLists.txt",), True, "cmake", None, "static_only", "codegraph-then-tree-sitter-then-clang-ast"),
-    _profile("cpp", "C++", {".cc", ".cpp", ".cxx", ".h", ".hpp"}, ("cpp",), ("cpp",), ".cpp", ("CMakeLists.txt",), True, "cmake", None, "static_only", "codegraph-then-tree-sitter-then-clang-ast"),
+    _profile("java", "Java", {".java"}, ("java",), ("java",), ".java", ("pom.xml", "build.gradle", "build.gradle.kts"), False, "java", None, "full"),
+    _profile("c", "C", {".c"}, ("c",), ("c",), ".c", ("CMakeLists.txt",), True, "cmake", None, "full", "codegraph-then-tree-sitter-then-clang-ast"),
+    _profile("cpp", "C++", {".cc", ".cpp", ".cxx", ".h", ".hpp"}, ("cpp",), ("cpp",), ".cpp", ("CMakeLists.txt",), True, "cmake", None, "full", "codegraph-then-tree-sitter-then-clang-ast"),
     _profile("cuda", "CUDA", {".cu", ".cuh"}, ("cpp",), ("cpp",), ".cu", ("CMakeLists.txt",), True, None, None, "capability_plugin"),
-    _profile("arkts", "ArkTS", {".ets"}, (), ("typescript",), ".ets", ("hvigorfile.ts", "build-profile.json5"), True, None, None, "capability_plugin"),
+    # CodeGraph does not index ArkTS. Keep the explicit compatibility parser
+    # used by FM-Agent instead of pretending an ETS export is authoritative.
+    _profile(
+        "arkts", "ArkTS", {".ets"}, (), (), ".ets",
+        ("hvigorfile.ts", "build-profile.json5"), True, None, None, "full",
+        "arkts-brace", dependency_hydration=DependencyHydration(
+            "oh_modules", ("oh-package-lock.json5", "oh-package-lock.json"),
+        ),
+    ),
     _profile("erlang", "Erlang", {".erl"}, (), (), ".erl", ("rebar.config", "mix.exs"), True, None, None, "capability_plugin"),
 )
 
@@ -94,8 +117,24 @@ def capability_matrix() -> list[dict]:
         "requires_build_metadata": item.requires_build_metadata,
         "build_adapter": item.build_adapter,
         "dynamic_adapter": item.dynamic_adapter,
+        "agent_execution_ecosystems": list(item.agent_execution_ecosystems),
+        "dependency_hydration": (
+            None if item.dependency_hydration is None else {
+                "directory_name": item.dependency_hydration.directory_name,
+                "lockfile_names": list(item.dependency_hydration.lockfile_names),
+            }
+        ),
         "support_level": item.support_level,
     } for item in PROFILES]
+
+
+def execution_ecosystems(profile: LanguageProfile, execution_mode: str) -> tuple[str, ...]:
+    """Return contract ecosystems allowed by the selected execution mechanism."""
+    if execution_mode == "agent-executed":
+        return profile.agent_execution_ecosystems or ("unavailable",)
+    if execution_mode == "adapter":
+        return (profile.dynamic_adapter or "unavailable",)
+    raise ValueError(f"unsupported execution mode: {execution_mode}")
 
 
 def probe_adapter_choices() -> tuple[str, ...]:
@@ -154,6 +193,105 @@ def _tree_sitter_spans(path: Path, profile: LanguageProfile) -> list[tuple[str, 
         name = source[name_node.start_byte:name_node.end_byte].decode("utf-8", "replace")
         if re.fullmatch(r"[A-Za-z_$][\w$]*", name): found.append((name, span.start_point[0] + 1, span.end_point[0] + 1))
     return sorted(set(found), key=lambda item: (item[1], item[2], item[0]))
+
+
+_ARKTS_SKIP = frozenset({
+    "if", "else", "while", "for", "do", "switch", "case", "return", "throw",
+    "new", "delete", "typeof", "instanceof", "void", "const", "let", "var",
+    "class", "import", "export", "async", "await", "struct",
+})
+
+
+def _arkts_brace_end(lines: list[str], start: int) -> int | None:
+    """Match one ArkTS body while ignoring comments and string literals.
+
+    FM-Agent uses a language-specific brace extractor for ArkTS because its
+    CodeGraph integration has no ArkTS parser. This is not a generic fallback.
+    """
+    depth, opened, block_comment = 0, False, False
+    for line_number in range(start, len(lines)):
+        line, column = lines[line_number], 0
+        while column < len(line):
+            char = line[column]
+            following = line[column + 1] if column + 1 < len(line) else ""
+            if block_comment:
+                if char == "*" and following == "/":
+                    block_comment, column = False, column + 2
+                else:
+                    column += 1
+                continue
+            if char == "/" and following == "/":
+                break
+            if char == "/" and following == "*":
+                block_comment, column = True, column + 2
+                continue
+            if char in {"'", '"', "`"}:
+                quote, column = char, column + 1
+                while column < len(line):
+                    if line[column] == "\\":
+                        column += 2
+                    elif line[column] == quote:
+                        column += 1
+                        break
+                    else:
+                        column += 1
+                continue
+            if char == "{":
+                depth, opened = depth + 1, True
+            elif char == "}" and opened:
+                depth -= 1
+                if depth == 0:
+                    return line_number
+            column += 1
+    return None
+
+
+def _arkts_brace_spans(path: Path) -> list[tuple[str, int, int]]:
+    """Port FM-Agent's ArkTS brace-boundary extraction for `.ets` sources."""
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    found: list[tuple[str, int, int]] = []
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if not stripped or stripped.startswith(("//", "import ", "export type ", "export interface ")):
+            index += 1
+            continue
+        if re.match(r"^(?:export\s+(?:default\s+)?)?(?:class|interface|enum|type|struct)\b", stripped):
+            index += 1
+            continue
+        if "(" not in stripped or stripped.rstrip().endswith(";") or re.match(r"^(if|for|while|switch|catch)\b", stripped):
+            index += 1
+            continue
+        signature_end, signature = index, stripped
+        for candidate in range(index, min(index + 6, len(lines))):
+            if "{" in lines[candidate]:
+                signature_end = candidate
+                signature = " ".join(line.strip() for line in lines[index:candidate + 1])
+                break
+        if "{" not in lines[signature_end]:
+            index += 1
+            continue
+        declared = re.search(r"\bfunction\s+([A-Za-z_$][\w$]*)", signature)
+        name = declared.group(1) if declared else None
+        if name is None:
+            arrow = re.search(
+                r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(",
+                signature,
+            )
+            name = arrow.group(1) if arrow else None
+        if name is None:
+            for match in re.finditer(r"\b([A-Za-z_$][\w$]*)\s*(?:<[^>]*>\s*)?\(", signature):
+                candidate = match.group(1)
+                if candidate not in _ARKTS_SKIP:
+                    name = candidate
+                    break
+        end = _arkts_brace_end(lines, signature_end)
+        if name is None or end is None:
+            index += 1
+            continue
+        found.append((name, index + 1, end + 1))
+        index = end + 1
+    return found
 
 
 def _clang_ast_spans(path: Path, profile: LanguageProfile) -> list[tuple[str, int, int]] | None:
@@ -224,8 +362,10 @@ def _clang_ast_spans(path: Path, profile: LanguageProfile) -> list[tuple[str, in
 def function_spans(path: Path, codegraph_spans: Iterable[tuple[str, int, int]] | None = None) -> tuple[list[tuple[str, int, int]], str]:
     """Return spans from CodeGraph first, then a real syntax tree.
 
-    There is deliberately no text/regular-expression fallback: a guessed
-    boundary would corrupt specification and call-graph artifacts. Python can
+    There is deliberately no generic text/regular-expression fallback: a
+    guessed boundary would corrupt specification and call-graph artifacts.
+    ArkTS uses its profile-declared compatibility brace parser, mirroring
+    FM-Agent. Python can
     use its standard-library AST when Tree-sitter is unavailable; all other
     profiles fail closed until their declared grammar is installed. C and C++
     additionally use their profile-declared Clang AST adapter, never text.
@@ -235,6 +375,8 @@ def function_spans(path: Path, codegraph_spans: Iterable[tuple[str, int, int]] |
     if codegraph_spans is not None:
         spans = [(str(name), int(start), int(end)) for name, start, end in codegraph_spans if int(start) >= 1 and int(end) >= int(start)]
         if spans: return spans, "codegraph"
+    if profile.span_extractor == "arkts-brace":
+        return _arkts_brace_spans(path), "arkts-brace"
     parsed = _tree_sitter_spans(path, profile)
     if parsed is not None: return parsed, "tree-sitter"
     parsed = _clang_ast_spans(path, profile)

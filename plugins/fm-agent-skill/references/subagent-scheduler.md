@@ -28,8 +28,9 @@ failures use `scheduler.py fail`; if retryable, call `scheduler.py retry` after
 remaining batches immediately when any paired sidecar became valid; otherwise
 wait 10 seconds. `input`, `semantic`, and `cancelled` are terminal. A semantic
 verification error is a valid `ERROR` result, not a retry. A Bug Validator job
-has a worker preparation pass, a Coordinator-owned dynamic execution, and a
-worker finalization pass. Runtime failures of that execution retry up to five
+has worker preparation, execution, and finalization passes in the default
+`agent-executed` mode; the optional `adapter` mode retains Coordinator-owned
+dynamic execution. Runtime failures retry up to five
 attempts by default. A completed negative Bug Validator result requeues the
 same job immediately twice by default, yielding three preserved probes; a
 confirmation finishes immediately. On resume, call
@@ -72,14 +73,17 @@ Coordinator:
 | all host subagents | 10 |
 | `spec_batch` | 4 |
 | `verify_function` | 8 |
-| `bug_validate` | 1 |
+| `bug_validate` | 2 |
 | `incremental_spec_plan` | 2 |
 | phase/refine/domain/edge/select/reconcile workers | 1 each |
 
 The corresponding configuration keys are `max_active_subagents`,
 `spec_concurrency`, `verify_concurrency`, `bug_validation_concurrency`, and
 `read_only_plan_concurrency`. They are operational limits, not semantic inputs:
-changing them does not invalidate an otherwise valid Git baseline. Use
+changing them does not invalidate an otherwise valid Git baseline. Parallel Bug
+Validator Workers may read the same snapshot but must use only their own
+attempt-local workspace and caches; they cannot share project-root build
+outputs. Use
 `scheduler.py capacity` to inspect current leases. Phases remain serial;
 independent caller-first-layer work may be parallel, verification may start as
 soon as its sidecars validate, and every phase must join and emit its receipt

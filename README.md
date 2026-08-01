@@ -101,7 +101,7 @@ planning, domain context, specification batches, function verification, Bug
 Validator, incremental selection, update planning, and caller reconciliation
 to named host subagents. It runs phases serially, dispatches independent
 same-layer jobs with an enforced global maximum of `10` workers (specification
-`4`, verification `8`, Bug Validator `1`, read-only planning `2`), and joins
+`4`, verification `8`, Bug Validator `2`, read-only planning `2`), and joins
 them before each gate. The Coordinator receives compact worker receipts and
 uses a phase receipt to inspect only escalations. Read
 [the scheduler contract](plugins/fm-agent-skill/references/subagent-scheduler.md)
@@ -126,24 +126,37 @@ twice by default, preserving all three probes.
 
 Bug validation has two deliberately separate surfaces. `probe_runner.py` is a
 language-profile-selected build or syntax check and is never behavioral proof.
-The Bug Validator first designs a public-entrypoint probe; the Coordinator then
-executes it through `reproduction_runner.py`, whose command is fixed by the
-approved language adapter. Only its persisted runtime output may confirm a
-candidate. The central language-profile registry recognizes C/C++, Python, Go,
-Rust, Java, JavaScript, TypeScript, CUDA, and ArkTS; Erlang remains an explicit
-ELP capability plugin. Dynamic execution is sandboxed with a read-only project
-view and disabled network, and is approved for Python, JavaScript, Go,
-Cargo/Rust, and TypeScript only when their runtime is provisioned in an
-approved non-user-owned runtime prefix (and `tsx` is available for TypeScript). Java,
-C/C++, CUDA, and ArkTS remain `inconclusive` until their Maven/Gradle, CMake,
-NVCC, or Hvigor adapters can validate public-entrypoint metadata. Both build
-and dynamic adapters use the same no-network Bubblewrap policy: a read-only
-project, private attempt scratch, and no host root or home mount. The Skill
-never executes an Agent-provided shell command merely to claim coverage.
+The default `agent-executed` Bug Validator first designs a public-entrypoint
+probe, then its Codex/Claude Worker runs the smallest project-scoped command
+sequence needed to reproduce it. This follows FM-Agent's broad language model:
+it can use installed toolchains for C/C++, Python, Go, Rust, Java, JavaScript,
+TypeScript, CUDA, ArkTS and Erlang, while recording exact commands, outputs and
+exit codes in immutable evidence. All registered languages use the same
+`host-project-toolchain` Worker contract; it derives the concrete command from
+the project. A language still needs its upstream extraction/capability support
+to create a `MISMATCH` candidate. ArkTS uses the same brace-boundary extractor
+as FM-Agent because CodeGraph does not index `.ets`. For an ArkTS snapshot, the
+Skill copies only project-local, lock-verified `oh_modules/` into the private
+snapshot; it never runs `ohpm install` or copies `.hvigor/`. If those existing
+dependencies are unavailable or unsafe, ArkTS dynamic validation is
+`unsupported/inconclusive` rather than a reason to require HDC. This compatibility mode is not a sandbox
+guarantee: use it only for projects you trust. It forbids `sudo`, dependency
+installation, Git-state changes and unrelated file access, but it does not
+provide the fixed-argv isolation of the optional `adapter` mode.
+
+Up to two Bug Validator jobs run concurrently by default. Every dynamic Worker
+uses its own attempt-local workspace and cache; it must not write shared
+project-root build outputs. Adapter-mode build profiles are also stored beside
+their owning attempt rather than in shared control state.
+
+Set `bug_validation_execution` to `adapter` to require the hardened Bubblewrap
+path: read-only project, private scratch, disabled network, and no host root or
+home mount. That mode recognizes fewer ecosystems and is the basis for the
+future controlled-adapter branch.
 
 Bug Validation is host-coordinated: `bug_validation_executor.py` enforces the
-preparation → sandbox runner → finalization → retry/summary state machine, while
-Codex or Claude Code invokes the two semantic Worker passes through its native
+preparation → Agent execution → finalization → retry/summary state machine,
+while Codex or Claude Code invokes the three Worker passes through its native
 subagent capability. It does not run or import the original FM-Agent pipeline.
 
 `input`, `semantic`, and `cancelled` failures are terminal. They leave
@@ -301,8 +314,7 @@ The following two-step workflow was verified with `cpp-demo`:
    against the successful baseline commit.
 
 The scheduler test covers retryable Agent failures, exhausted attempts,
-interrupted-job recovery, invalid outputs, and the single-attempt Bug Validator
-limit.
+interrupted-job recovery, invalid outputs, and Bug Validator admission limits.
 
 ## Repository layout
 
@@ -367,7 +379,7 @@ full、incremental 和 resume 都会在每个阶段前显示“当前阶段/总�
 ## Claude worker 调度、失败与恢复
 
 Coordinator 是 `fm_agent_skill/` 的唯一写入者。它按阶段串行推进，在同一调用层内最多并发
-全局最多运行 10 个独立 worker（规格 4、验证 8、Bug Validator 1、只读增量计划 2）；调度器在启动前强制占用名额，join 后写入阶段回执并通过 gate 才能进入下一阶段。
+全局最多运行 10 个独立 worker（规格 4、验证 8、Bug Validator 2、只读增量计划 2）；调度器在启动前强制占用名额，join 后写入阶段回执并通过 gate 才能进入下一阶段。
 每个语义单元有固定 job id，保存在 `fm_agent_skill/jobs/<job-id>.json`。
 
 超时、限流、Agent 工具失败、缺失产物或无效产物会成为 `retryable`。Coordinator 会在**同一个
@@ -376,7 +388,7 @@ domain context 每次失败后等待 10 秒；spec 阶段若已得到部分有�
 无任何进展才等待 10 秒。有效 sidecar 会保留。
 
 验证推理本身失败时应写出有效的 `ERROR` result，而不是重复调度；只有 Agent 或结果产物失败才
-重试。Bug Validator 先设计公共入口 probe，再由 Coordinator 通过固定动态运行器实际执行；构建或语法检查不能确认缺陷。运行或产物失败最多尝试 5 次；正常完成但未复现或证据不足时会在同一 job 内额外复测 2 次，并保留全部 probe 证据。`input`、`semantic` 和 `cancelled` 是终止失败：下游
+重试。默认的 Bug Validator 先设计公共入口 probe，再由 Codex/Claude Worker 使用项目已有工具链实际执行，并记录精确命令、输出和退出码；默认最多并发两个 job，每个 job 只能使用自身 attempt 目录下的 workspace 和缓存，不能写入项目根目录的共享构建产物。构建或语法检查不能确认缺陷。该快速兼容模式不是沙箱保证：仅用于可信项目，且 Worker 不得使用 `sudo`、安装依赖、修改 Git 状态或读取无关用户文件。需要固定 argv、禁网和只读项目隔离时，将 `bug_validation_execution` 设为 `adapter`。运行或产物失败最多尝试 5 次；正常完成但未复现或证据不足时会在同一 job 内额外复测 2 次，并保留全部 probe 证据。`input`、`semantic` 和 `cancelled` 是终止失败：下游
 不会启动，当前阶段失败，但已有独立有效产物会保留。resume 前会先回收遗留 `running` job：产物有效
 则直接成功，否则在次数未耗尽时原地转为 `retryable`。
 

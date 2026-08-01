@@ -264,9 +264,12 @@ class; if its status is `retryable`, wait 10 seconds and call
 batches immediately; wait 10 seconds only when it made no progress. A retried
 spec batch preserves valid paired sidecars and repairs only incomplete assigned
 artifacts. A verification-level failure is a valid `ERROR` result, not a retry;
-retry only when the Agent or result artifact itself failed. A Bug Validator job
-uses a preparation pass, a Coordinator-owned dynamic runner, then a
-finalization pass. Its runtime failures retry up to five attempts by default. A
+retry only when the Agent or result artifact itself failed. In default
+`agent-executed` mode, a Bug Validator job uses Worker preparation, execution,
+and finalization passes; optional `adapter` mode uses the Coordinator-owned
+dynamic runner between preparation and finalization. Up to two Bug Validator
+jobs may run concurrently, but each uses only its own attempt-local workspace
+and cache. Its runtime failures retry up to five attempts by default. A
 completed `not_reproduced` or `inconclusive` result is not a runtime failure:
 requeue its same job immediately until it has three completed negative probes
 by default, preserving each probe in the result's `attempts` array. A
@@ -348,13 +351,18 @@ It returns exactly one next action. On `host_worker`, invoke only the named
 `fm-bug-validate-worker` pass through Codex/Claude's native subagent mechanism.
 Pass the returned `job_id`, `attempt`, allowed paths, and pass name to that
 Worker; do not let it reconstruct them from a prior attempt. After preparation,
-call `next`; on `run_dynamic`, call `run-dynamic`; after finalization, submit
-its compact receipt with `submit-finalization --receipt-json ...`. Process one
+call `next`. In default `agent-executed` mode, process the returned `execution`
+Worker pass, then call `submit-agent-execution`; the Worker must have written
+its immutable `reproduction_result.json`. In optional `adapter` mode,
+`run_dynamic` instead requires `run-dynamic`. After finalization, submit its
+compact receipt with `submit-finalization --receipt-json ...`. Process one
 returned action at a time: a report path alone is never evidence that an
 attempt finished. Runtime errors requeue through the same state machine;
 terminal phase summaries are written by it after all Bug Validator jobs finish.
-The state machine never invokes FM-Agent, an LLM API, or a shell command chosen
-by a Worker. `build_result.json` can never confirm or reject a defect. Read
+`agent-executed` allows the Worker to choose project-scoped commands in the
+FM-Agent compatibility model. Up to two Bug Validator jobs run concurrently by
+default; each Worker must use only its assigned attempt-local workspace and
+cache, never a project-root build output. `build_result.json` can never confirm or reject a defect. Read
 [bug-validation.md](../../references/bug-validation.md) for the full contract.
 
 Only after every phase gate succeeds may the agent call `pipeline.py complete`

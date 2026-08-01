@@ -17,7 +17,7 @@ from pathlib import Path
 
 from _common import project, state
 from probe_runner import safe_component
-from fm_agent_core.languages import profile_for_key
+from fm_agent_core.languages import execution_ecosystems, profile_for_key
 from sandbox import AdapterUnavailable, sandbox_command, sandbox_metadata
 
 
@@ -30,7 +30,7 @@ def attempt_dir(target: Path, bug_id: str, attempt: int) -> Path:
     return state.skill_dir(target) / "probes" / safe_component(bug_id) / f"attempt_{attempt:03d}"
 
 
-def read_contract(target: Path, bug_id: str, attempt: int) -> tuple[Path, dict]:
+def read_contract(target: Path, bug_id: str, attempt: int, execution_mode: str = "adapter") -> tuple[Path, dict]:
     root = attempt_dir(target, bug_id, attempt)
     contract = state.read_json(root / "reproduction.json", None)
     if not isinstance(contract, dict):
@@ -55,9 +55,10 @@ def read_contract(target: Path, bug_id: str, attempt: int) -> tuple[Path, dict]:
         raise ValueError("reproduction contract requires structured public_entrypoint metadata")
     if not all(isinstance(entrypoint.get(field), str) and entrypoint[field].strip() for field in ("ecosystem", "kind", "target", "symbol")):
         raise ValueError("public_entrypoint fields must be non-empty strings")
-    expected_ecosystem = profile.dynamic_adapter or "unavailable"
-    if entrypoint["ecosystem"] != expected_ecosystem:
-        raise ValueError(f"public_entrypoint ecosystem must be {expected_ecosystem} for {profile.key}")
+    allowed_ecosystems = execution_ecosystems(profile, execution_mode)
+    if entrypoint["ecosystem"] not in allowed_ecosystems:
+        expected = ", ".join(allowed_ecosystems)
+        raise ValueError(f"public_entrypoint ecosystem must be one of {expected} for {profile.key} in {execution_mode} mode")
     public_target = Path(entrypoint["target"])
     if public_target.is_absolute() or ".." in public_target.parts:
         raise ValueError("public_entrypoint target must be project-relative")

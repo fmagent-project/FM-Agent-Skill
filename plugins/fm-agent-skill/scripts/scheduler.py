@@ -28,7 +28,7 @@ DEFAULT_CAPS = {
     "max_active_subagents": 10,
     "spec_concurrency": 4,
     "verify_concurrency": 8,
-    "bug_validation_concurrency": 1,
+    "bug_validation_concurrency": 2,
     "read_only_plan_concurrency": 2,
 }
 

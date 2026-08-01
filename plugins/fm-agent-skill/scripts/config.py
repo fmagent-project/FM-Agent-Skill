@@ -14,9 +14,10 @@ DEFAULTS = {
     "max_active_subagents": 10,
     "spec_concurrency": 4,
     "verify_concurrency": 8,
-    "bug_validation_concurrency": 1,
+    "bug_validation_concurrency": 2,
     "read_only_plan_concurrency": 2,
     "spec_batch_size": 1, "bug_validation_max_attempts": 5, "bug_validation_negative_retries": 2,
+    "bug_validation_execution": "agent-executed",
     "probe_adapter": "auto",
     "granularity": 40, "retries": 5, "lock_ttl_seconds": 7200, "resume_grace_seconds": 600,
     "codegraph_path": None, "call_graph_backend": "agent-static", "extra_edge": None, "knowledge": [],
@@ -32,6 +33,10 @@ def load(target):
         raise ValueError(
             "saved probe_adapter is unsupported by the LanguageProfile registry: "
             f"{result['probe_adapter']}"
+        )
+    if result["bug_validation_execution"] not in {"agent-executed", "adapter"}:
+        raise ValueError(
+            "saved bug_validation_execution must be agent-executed or adapter"
         )
     return result
 
@@ -55,6 +60,7 @@ def main():
     parser.add_argument("--spec-batch-size", type=int)
     parser.add_argument("--bug-validation-max-attempts", type=int)
     parser.add_argument("--bug-validation-negative-retries", type=int)
+    parser.add_argument("--bug-validation-execution", choices=("agent-executed", "adapter"))
     parser.add_argument("--probe-adapter", choices=probe_adapter_choices())
     parser.add_argument("--granularity", type=int)
     parser.add_argument("--retries", type=int)
@@ -72,7 +78,7 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
     if args.action == "set":
-        for key in ("max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "scheduler_executor", "spec_batch_size", "bug_validation_max_attempts", "bug_validation_negative_retries", "probe_adapter", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
+        for key in ("max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "scheduler_executor", "spec_batch_size", "bug_validation_max_attempts", "bug_validation_negative_retries", "bug_validation_execution", "probe_adapter", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
             value = getattr(args, key)
             if value is not None: config[key] = value
         if args.submodules is not None: config["submodules"] = args.submodules

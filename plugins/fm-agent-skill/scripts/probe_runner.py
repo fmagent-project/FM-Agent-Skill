@@ -15,14 +15,14 @@ import subprocess
 import sys
 
 from _common import project, state
-from fm_agent_core.languages import PROFILES, probe_adapter_choices
+from fm_agent_core.languages import PROFILES, probe_adapter_choices, source_extensions
 from sandbox import AdapterUnavailable, sandbox_command, sandbox_metadata
 
 
 # Derived from the central registry; do not add extension maps in this runner.
 LANGUAGE_EXTENSIONS = {
     profile.key: set(profile.extensions) for profile in PROFILES
-    if profile.support_level in {"full", "static_only"}
+    if profile.extensions & source_extensions()
 }
 IGNORED_DIRS = {".git", ".codegraph", "fm_agent", "fm_agent_skill", "node_modules", "build", "target", "dist", "out", "__pycache__"}
 ADAPTERS = frozenset(probe_adapter_choices())
@@ -123,8 +123,18 @@ def adapter_commands(target: Path, adapter: str, attempt: Path, cmake_target: st
     return [], "adapter has no safe built-in command"
 
 
-def write_profile(target: Path, data: dict) -> Path:
-    path = state.control_dir(target) / "build_profile.json"; state.atomic_json(path, data); return path
+def write_profile(target: Path, data: dict, attempt: Path | None = None) -> Path:
+    """Persist detection globally or a running build profile beside its attempt.
+
+    ``detect`` has one current project profile. A concurrent ``run`` instead
+    owns an immutable profile within its assigned attempt, so independently
+    scheduled Bug Validators never overwrite each other's evidence.
+    """
+    path = (attempt / "build_profile.json") if attempt is not None else (state.control_dir(target) / "build_profile.json")
+    if attempt is not None and path.exists():
+        raise ValueError(f"build profile already exists and is immutable: {path}")
+    state.atomic_json(path, data)
+    return path
 
 
 def configured_adapter(target: Path, requested: str | None) -> str:
@@ -137,7 +147,7 @@ def configured_adapter(target: Path, requested: str | None) -> str:
 
 
 def run_probe(target: Path, bug_id: str, attempt_number: int, requested: str, timeout: int, cmake_target: str | None) -> dict:
-    data = profile(target, requested); profile_path = write_profile(target, data)
+    data = profile(target, requested)
     attempt = state.skill_dir(target) / "probes" / safe_component(bug_id) / f"attempt_{attempt_number:03d}"
     # The host Bug Validator preparation pass owns reproduction.json/probe.* in
     # this immutable attempt directory.  Build evidence is coordinator-owned
@@ -147,6 +157,7 @@ def run_probe(target: Path, bug_id: str, attempt_number: int, requested: str, ti
     attempt.mkdir(parents=True, exist_ok=True)
     if (attempt / "build_result.json").exists():
         raise ValueError(f"build result already exists and is immutable: {attempt / 'build_result.json'}")
+    profile_path = write_profile(target, data, attempt)
     result = {"schema_version": 1, "bug_id": bug_id, "attempt": attempt_number, "attempt_dir": str(attempt), "profile_path": str(profile_path), "profile": data, "commands": [], "started_at": state.now()}
     if not data["supported"]:
         result.update({"state": "unsupported", "ok": False, "reason": data["reason"] or "unsupported adapter"})

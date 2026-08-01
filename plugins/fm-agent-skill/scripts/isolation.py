@@ -7,14 +7,17 @@ current working tree without changing the user's branch, index, or HEAD.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
 
 from _common import project, state
+from fm_agent_core.languages import profile_for_key
 
 
 MARKER = "isolation.json"
@@ -22,6 +25,10 @@ ACTIVE_REF = "refs/fm-agent-skill/active"
 BASELINE_REF = "refs/fm-agent-skill/baseline"
 GENERATED_DIRS = ("fm_agent", "fm_agent_skill", ".codegraph")
 IGNORE_LINES = tuple(f"/{name}/" for name in GENERATED_DIRS)
+_SKIP_SCAN_DIRS = frozenset({
+    ".git", ".hvigor", ".codegraph", ".test", ".gradle",
+    "build", "target", "node_modules", "fm_agent", "fm_agent_skill",
+})
 
 
 def marker_path(target: Path) -> Path:
@@ -62,6 +69,177 @@ def _copy_outputs(source: Path, snapshot: Path) -> None:
         if origin.is_dir(): shutil.copytree(origin, destination, symlinks=True)
 
 
+def _json5_object(path: Path) -> dict:
+    """Parse the JSON subset emitted by OhPM, accepting comments/trailing commas.
+
+    This deliberately supports only the lock/package metadata shape we inspect;
+    invalid or more exotic JSON5 is rejected rather than guessed.
+    """
+    raw = path.read_text(encoding="utf-8", errors="strict")
+    output: list[str] = []
+    index = 0
+    quote: str | None = None
+    while index < len(raw):
+        char = raw[index]
+        following = raw[index + 1] if index + 1 < len(raw) else ""
+        if quote is not None:
+            output.append(char)
+            if char == "\\":
+                if index + 1 < len(raw):
+                    output.append(raw[index + 1]); index += 2; continue
+            elif char == quote:
+                quote = None
+            index += 1; continue
+        if char in {"'", '"'}:
+            # OhPM's generated files use JSON strings. Reject single-quoted
+            # JSON5 rather than silently transforming package metadata.
+            if char == "'":
+                raise ValueError("single-quoted JSON5 strings are not accepted")
+            quote = char; output.append(char); index += 1; continue
+        if char == "/" and following == "/":
+            index = raw.find("\n", index)
+            if index < 0: break
+            output.append("\n"); index += 1; continue
+        if char == "/" and following == "*":
+            end = raw.find("*/", index + 2)
+            if end < 0: raise ValueError("unterminated JSON5 comment")
+            index = end + 2; continue
+        output.append(char); index += 1
+    normalized = re.sub(r",\s*([}\]])", r"\1", "".join(output))
+    value = json.loads(normalized)
+    if not isinstance(value, dict): raise ValueError("JSON5 document must be an object")
+    return value
+
+
+def _contained_regular_tree(root: Path, project_root: Path) -> None:
+    """Allow OhPM links inside the snapshot project, never outside it."""
+    if root.is_symlink() or project_root not in root.resolve().parents:
+        raise ValueError("dependency directory is not a real project-local directory")
+    source_root = project_root.resolve()
+    for current, directories, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        for name in [*directories, *files]:
+            candidate = current_path / name
+            if candidate.is_symlink():
+                try:
+                    resolved = candidate.resolve(strict=True)
+                except OSError as exc:
+                    raise ValueError(f"dependency tree has a broken symbolic link: {candidate.relative_to(project_root)}") from exc
+                if resolved != source_root and source_root not in resolved.parents:
+                    raise ValueError(f"dependency link escapes project: {candidate.relative_to(project_root)}")
+
+
+def _lockfile_packages(lockfile: Path) -> set[tuple[str, str]]:
+    lock = _json5_object(lockfile)
+    if not isinstance(lock.get("lockfileVersion"), int) or not isinstance(lock.get("packages"), dict):
+        raise ValueError("lockfile has no valid lockfileVersion/packages section")
+    packages: set[tuple[str, str]] = set()
+    for value in lock["packages"].values():
+        if not isinstance(value, dict): continue
+        name, version = value.get("name"), value.get("version")
+        if isinstance(name, str) and name and isinstance(version, str) and version:
+            packages.add((name, version))
+    return packages
+
+
+def _package_identity(manifest: Path) -> tuple[str, str] | None:
+    """Read the two simple JSON5 fields needed for an OhPM package binding."""
+    text = manifest.read_text(encoding="utf-8", errors="strict")
+    values = {}
+    for field in ("name", "version"):
+        match = re.search(rf"(?<![\w$])['\"]?{field}['\"]?\s*:\s*(['\"])(.*?)\1", text)
+        if match is None:
+            return None
+        values[field] = match.group(2)
+    return values["name"], values["version"]
+
+
+def _dependency_manifests(dependency_root: Path) -> list[Path]:
+    """Include package manifests reached through safe OhPM workspace links."""
+    found = {path.resolve() for path in dependency_root.rglob("oh-package.json5")}
+    for current, directories, files in os.walk(dependency_root, followlinks=False):
+        for name in [*directories, *files]:
+            candidate = Path(current) / name
+            if not candidate.is_symlink():
+                continue
+            resolved = candidate.resolve(strict=True)
+            manifest = resolved / "oh-package.json5" if resolved.is_dir() else None
+            if manifest is not None and manifest.is_file():
+                found.add(manifest.resolve())
+    return sorted(found)
+
+
+def _validate_oh_modules(dependency_root: Path, lockfile: Path, source: Path) -> dict:
+    """Bind every installed package manifest to the adjacent OhPM lockfile."""
+    _contained_regular_tree(dependency_root, source)
+    packages = _lockfile_packages(lockfile)
+    manifests = _dependency_manifests(dependency_root)
+    if not manifests:
+        raise ValueError("oh_modules contains no package metadata")
+    for manifest in manifests:
+        identity = _package_identity(manifest)
+        if identity is None or identity not in packages:
+            raise ValueError(f"dependency metadata is absent from {lockfile.name}: {manifest.relative_to(source)}")
+    return {
+        "dependency_path": dependency_root.relative_to(source).as_posix(),
+        "lockfile_path": lockfile.relative_to(source).as_posix(),
+        "lockfile_sha256": hashlib.sha256(lockfile.read_bytes()).hexdigest(),
+        "package_count": len(manifests),
+    }
+
+
+def _walk_project_directories(source: Path):
+    for current, directories, _ in os.walk(source, followlinks=False):
+        directories[:] = [
+            name for name in directories
+            if name not in _SKIP_SCAN_DIRS and not (Path(current) / name).is_symlink()
+        ]
+        yield Path(current), directories
+
+
+def _hydrate_arkts_dependencies(source: Path, snapshot: Path) -> dict:
+    """Copy only lock-bound ArkTS dependencies that Git intentionally omits.
+
+    A missing or unsafe dependency tree does not block static analysis. The
+    marker records why dynamic ArkTS validation must later be inconclusive.
+    """
+    policy = profile_for_key("arkts").dependency_hydration
+    assert policy is not None
+    arkts_seen = False
+    candidates: list[tuple[Path, Path]] = []
+    for current, directories in _walk_project_directories(source):
+        arkts_seen = arkts_seen or any(path.suffix.lower() == ".ets" for path in current.glob("*.ets"))
+        if policy.directory_name not in directories:
+            continue
+        dependency_root = current / policy.directory_name
+        directories.remove(policy.directory_name)
+        lockfile = next((current / name for name in policy.lockfile_names if (current / name).is_file()), None)
+        if lockfile is None:
+            return {"status": "unavailable", "reason": f"{dependency_root.relative_to(source)} has no adjacent OhPM lockfile", "entries": []}
+        candidates.append((dependency_root, lockfile))
+    if not arkts_seen:
+        return {"status": "not_applicable", "entries": []}
+    if not candidates:
+        return {"status": "unavailable", "reason": "no project-local lock-bound oh_modules directory", "entries": []}
+    entries = []
+    try:
+        for dependency_root, lockfile in candidates:
+            entry = _validate_oh_modules(dependency_root, lockfile, source)
+            destination = snapshot / entry["dependency_path"]
+            if destination.exists():
+                raise ValueError(f"snapshot already contains {entry['dependency_path']}")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            # OhPM uses in-tree links to its .ohpm store. They have already
+            # been proven contained above, so preserve that layout verbatim.
+            shutil.copytree(dependency_root, destination, symlinks=True)
+            entries.append(entry)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        for entry in entries:
+            shutil.rmtree(snapshot / entry["dependency_path"], ignore_errors=True)
+        return {"status": "unavailable", "reason": str(exc), "entries": []}
+    return {"status": "hydrated", "entries": entries}
+
+
 def create(target: Path) -> dict:
     existing = marker(target)
     if isinstance(existing.get("snapshot"), str) and Path(existing["snapshot"]).is_dir():
@@ -84,7 +262,8 @@ def create(target: Path) -> dict:
         _run(target, "update-ref", ACTIVE_REF, commit)
         _run(target, "worktree", "add", "--detach", "--quiet", str(snapshot), commit)
         _copy_outputs(target, snapshot)
-        data = {"schema_version": 2, "source_project": str(target), "snapshot": str(snapshot), "snapshot_commit": commit, "created_at": state.now()}
+        arkts_dependencies = _hydrate_arkts_dependencies(target, snapshot)
+        data = {"schema_version": 3, "source_project": str(target), "snapshot": str(snapshot), "snapshot_commit": commit, "created_at": state.now(), "arkts_dependencies": arkts_dependencies}
         state.atomic_json(marker_path(target), data)
         state.atomic_json(marker_path(snapshot), data)
         return data

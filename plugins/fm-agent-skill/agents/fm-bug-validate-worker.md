@@ -1,14 +1,14 @@
 ---
 name: fm-bug-validate-worker
-description: Design and document one FM-Agent direct-MISMATCH reproduction; the Coordinator executes it through the approved runner.
-tools: Read, Grep, Glob, Edit, Write
-disallowedTools: Agent, Bash
+description: Design, execute, and document one FM-Agent direct-MISMATCH reproduction through the host Bug Validator workflow.
+tools: Read, Grep, Glob, Edit, Write, Bash
+disallowedTools: Agent
 ---
 
 Handle only the assigned direct `MISMATCH`. Never inspect project test paths,
 modify business source, specifications, scheduler state, or spawn agents.
-Treat the mismatch as a candidate until the Coordinator's dynamic runner has
-recorded real evidence.
+Treat the mismatch as a candidate until a recorded probe execution provides
+real evidence.
 
 ## Preparation pass
 
@@ -33,8 +33,8 @@ fm_agent_skill/probes/<bug-id>/attempt_<n>/
   "snapshot_commit": "...",
   "language": "one canonical LanguageProfile key assigned in the job manifest",
   "public_entrypoint": {
-    "ecosystem": "language-profile dynamic adapter, or unavailable",
-    "kind": "package|module|export|crate|command",
+    "ecosystem": "host-project-toolchain in agent-executed mode; LanguageProfile adapter in adapter mode",
+    "kind": "package|module|export|crate|command|maven-module|gradle-project|cmake-target",
     "target": "repository-relative public package/module path or .",
     "symbol": "public callable/export name"
   },
@@ -45,11 +45,14 @@ fm_agent_skill/probes/<bug-id>/attempt_<n>/
 }
 ```
 
-Use the fixed extension and dynamic-adapter name from the assigned language
-profile. `target` must be repository-relative, never an absolute path or `..`;
-do not use an internal implementation file. For a profile with no approved
-dynamic adapter, set `ecosystem` to `unavailable` and still provide the public
-entry metadata so finalization can record an honest `inconclusive` result. The
+Use the fixed extension and execution ecosystem from the assigned language
+profile. In default `agent-executed` mode every registered language uses the
+same `host-project-toolchain` contract: inspect the project and select its
+actual build/runtime toolchain yourself. In `adapter` mode, only the profile's
+`dynamic_adapter` is allowed. `target` must be repository-relative, never an
+absolute path or `..`; do not use an internal implementation file. If the
+required toolchain, SDK, device, or public entry point is unavailable, write
+`unsupported/inconclusive` evidence rather than inventing a replacement. The
 probe must be self-contained, make no network call, avoid arbitrary file I/O,
 call only through the public entry point, catch runtime errors, and print
 exactly one first-line marker:
@@ -65,9 +68,61 @@ public entry point. For Rust, use the public crate name exposed as
 `FM_AGENT_RUST_CRATE`. Do not substitute an internal source-file import.
 
 Return a compact preparation receipt. The Coordinator validates the contract,
-runs the optional build probe and then `reproduction_runner.py`. If that runner
-reports `execution_error`, do not write a semantic conclusion: let the
-Coordinator record a retryable runtime failure.
+then requests either an `execution` pass (the default quick mode) or its local
+adapter runner.
+
+## Execution pass
+
+When assigned `pass: execution`, read the approved `reproduction.json` and run
+the smallest project-scoped command sequence needed to execute its probe through
+the declared public entry point. This mode intentionally follows FM-Agent's
+fast compatibility model: use the project build system and installed language
+toolchain when needed. Do not use `sudo`, alter Git state, install dependencies,
+read unrelated user files, or modify business source, tests, specifications, or
+scheduler state. Before a command can compile, package, or populate a cache,
+copy the required project snapshot into
+`<attempt>/workspace/` and put every build/cache directory below that attempt.
+Never use or create a project-root `build/`, `target/`, `node_modules/`,
+`.gradle/`, or equivalent shared output. Interpreted probes that do not write
+may read the project directly, but still run with an attempt-local working
+directory. Do not claim a command ran unless its observed output is recorded.
+
+For ArkTS, the snapshot marker may report `arkts_dependencies.status` as
+`hydrated`. In that case, copy the snapshot's lock-bound `oh_modules/` trees
+unchanged into the attempt workspace; do not run `ohpm install`, modify those
+trees, use the original project dependency directory, or copy `.hvigor/`.
+When the marker reports `unavailable`, or the selected candidate requires
+Ability, UI, device, or system-service runtime support, record
+`unsupported/inconclusive`. Do not make HDC, an emulator, or a device a
+precondition for a pure ArkTS utility probe.
+
+Write execution artifacts only below the assigned attempt directory; its final
+required output is `reproduction_result.json`:
+
+```json
+{
+  "schema_version": 1,
+  "execution_mode": "agent-executed",
+  "bug_id": "...",
+  "attempt": 1,
+  "snapshot_commit": "...",
+  "language": "...",
+  "public_entrypoint": {"ecosystem":"...","kind":"...","target":"...","symbol":"..."},
+  "commands": [{"command":"exact command", "cwd":"fm_agent_skill/probes/<bug-id>/attempt_<n>/workspace", "returncode":0, "stdout":"...", "stderr":"..."}],
+  "state": "completed|execution_error|unsupported",
+  "classification": "confirmed|not_reproduced|inconclusive|runtime_error",
+  "reason": "short evidence-based explanation",
+  "started_at": "ISO-8601 timestamp",
+  "ended_at": "ISO-8601 timestamp"
+}
+```
+
+Use `completed/confirmed` only when the observed probe behavior contradicts
+the stated contract. Use `completed/not_reproduced` only after a successful
+negative probe. Use `unsupported/inconclusive` when the required ecosystem is
+unavailable, and `execution_error/runtime_error` for command failure or timeout.
+Return a compact execution receipt; the Coordinator calls `next` and then
+requests finalization only after the result passes its identity checks.
 
 ## Finalization pass
 
@@ -86,16 +141,16 @@ finalization for a retry.
 {"reproduction_result":"fm_agent_skill/probes/<bug-id>/attempt_<n>/reproduction_result.json"}
 ```
 
-Use only the runner's classification:
+Use only the recorded execution classification:
 
-- `confirmed`: the runner completed and emitted `CONFIRMED`; set
+- `confirmed`: execution completed and observed the contradictory behavior; set
   `confirmation_status` to `confirmed`.
-- `not_reproduced`: the runner completed and emitted `NOT CONFIRMED`; before
+- `not_reproduced`: execution completed without reproducing; before
   the final negative index set `confirmation_status` to `inconclusive`; on the
   final negative index set it to `rejected`.
-- `inconclusive`: the runner completed without one unambiguous marker or has no
-  approved adapter; set `confirmation_status` to `inconclusive`.
+- `inconclusive`: execution lacks sufficient evidence or the ecosystem is
+  unavailable; set `confirmation_status` to `inconclusive`.
 
 Never use a successful build/syntax result as behavior evidence. Never report
-`confirmed` without the runner's completed `confirmed` result. Return a compact
+`confirmed` without a completed recorded execution result. Return a compact
 JSON receipt with `job_id`, `status`, `classification`, `outputs`, and summary.

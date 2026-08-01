@@ -14,19 +14,48 @@ may produce `confirmed`.
 
 Before the first candidate, run `probe_runner.py detect`; its profile at
 `fm_agent_skill/control/build_profile.json` selects an optional safe build
-adapter. Language capabilities are defined once in
+adapter. A later adapter-mode `probe_runner.py run` writes its profile beside
+that attempt rather than to this shared discovery path. Language capabilities are defined once in
 `src/fm_agent_core/languages.py`: canonical names, file extensions, CodeGraph
 names, Tree-sitter grammar names, span extractor, public-entry strategy, build
 metadata detector, build adapter, dynamic adapter, and support level must all
 come from that registry. Do not add a parallel extension or ecosystem map in a
-runner. `full` profiles currently mean Python, JavaScript, TypeScript, Go and
-Rust; Java and C/C++ are `static_only` until their dynamic adapters exist;
-CUDA, ArkTS and Erlang are independent `capability_plugin` profiles.
+runner. The registry separates `dynamic_adapter` (a controlled fixed-argv
+adapter) from `agent_execution_ecosystems`. All registered profiles use the
+same `host-project-toolchain` ecosystem in `agent-executed` mode, matching the
+original FM-Agent Bug Validator: the Worker identifies Maven, CMake, NVCC,
+Hvigor, Erlang/OTP, or another project toolchain from the project itself.
+`dynamic_adapter` remains separate and may be absent in restricted `adapter`
+mode. ArkTS has an explicit FM-Agent-compatible brace extractor because
+CodeGraph does not index `.ets`; CUDA and Erlang still need their upstream
+capability support before they can produce a Bug Validator candidate. Any
+candidate that exists uses this same dynamic execution contract.
 
 For static extraction, CodeGraph spans are authoritative. Without a matching
 CodeGraph span, use the declared Tree-sitter grammar; Python may use its native
 AST and C/C++ may use their profile-declared Clang AST when that grammar is
-unavailable. There is no regular-expression boundary fallback.
+unavailable. ArkTS is the explicit exception: its profile declares the
+FM-Agent-compatible `arkts-brace` extractor because CodeGraph has no ArkTS
+backend. There is no generic regular-expression boundary fallback.
+
+### ArkTS dependency hydration
+
+ArkTS declares an `oh_modules` hydration policy in its LanguageProfile. Git
+does not include this ignored dependency tree in the analysis snapshot, so
+snapshot creation scans only project-local `oh_modules/` directories that have
+an adjacent `oh-package-lock.json5` (or legacy `oh-package-lock.json`). It
+parses the lockfile and checks every installed `oh-package.json5` name/version
+against it, rejects symbolic links, records a lockfile SHA-256 in the snapshot
+marker, then copies the verified tree into the private snapshot. Each Worker
+copies that snapshot into its own attempt workspace before Hvigor runs.
+
+This is a read-only dependency transfer, not dependency installation: it never
+invokes `ohpm install`, contacts a registry, reads a global cache, or copies
+`.hvigor/`. Missing, malformed, stale, or unsafe dependency trees leave static
+analysis intact but require ArkTS dynamic validation to report
+`unsupported/inconclusive`. Pure host-runnable utilities may be probed; code
+requiring Ability, UI, device, or system-service runtime support is likewise
+inconclusive and must not cause HDC/emulator setup.
 
 For JavaScript and TypeScript, Tree-sitter extraction includes named arrow
 functions declared through a `variable_declarator`, such as
@@ -35,7 +64,7 @@ single declaration (including `const`/`export`) and is keyed by `parse`.
 Build adapters run only fixed commands and may not be mistaken for a
 reproduction.
 
-## Controlled dynamic reproduction
+## Fast agent-executed reproduction
 
 For each candidate and attempt:
 
@@ -45,21 +74,20 @@ For each candidate and attempt:
 2. Validate that the contract names the current snapshot, a structured public
    entry point (`ecosystem`, `kind`, repository-relative `target`, `symbol`),
    a fixed language extension, no shell command, and fixed `CONFIRMED` /
-   `NOT CONFIRMED` markers. Its ecosystem must equal the profile's dynamic
-   adapter, or `unavailable` for a static-only/capability profile. Run the
-   optional `probe_runner.py run` build check.
-   It uses the same Bubblewrap policy as dynamic reproduction; it never runs a
-   project build directly on the host.
-3. The Coordinator, not a worker, runs:
-
-   ```bash
-   <python3> "$FM_AGENT_SKILL_ROOT/scripts/reproduction_runner.py" run \
-     --project "$PROJECT" --bug-id "$BUG_ID" --attempt "$JOB_ATTEMPT"
-   ```
-
-4. If the runner returns `execution_error`, call `scheduler.py fail` with
-   `execution` and requeue the same job. Do not write a semantic result.
-5. Otherwise invoke the same worker in its finalization pass with the immutable
+   `NOT CONFIRMED` markers. In `agent-executed` mode every profile uses the
+   registry's `host-project-toolchain` ecosystem; in `adapter` mode, it must
+   equal the profile's `dynamic_adapter`. The default
+   `bug_validation_execution: agent-executed` requests the same Worker in an
+   execution pass. It uses the repository's real toolchain and build system,
+   records every command, exit code and bounded output in
+   `reproduction_result.json`, and may support any FM-Agent language. Up to
+   `bug_validation_concurrency` jobs (two by default) may execute together;
+   every recorded command must use a working directory below that attempt, and
+   any build workspace or cache must be private to it.
+3. Submit that immutable execution evidence to the executor. If it records
+   `execution_error`, the executor requeues the same job; do not write a
+   semantic result.
+4. Otherwise invoke the same worker in its finalization pass with the immutable
    `reproduction_result.json`, then call `scheduler.py complete` with the
    matching classification.
 
@@ -69,35 +97,37 @@ current overall job attempt and must point at that exact attempt's
 probe; the host state machine requests finalization again until the current
 dynamic evidence is appended.
 
-The runners accept no Agent-provided command. They execute only an approved
-ecosystem adapter inside Bubblewrap with a read-only project mount, private
-attempt scratch bound at `/tmp`, timeout, disabled network, cleared
-environment, and no mount of `/`, `/home`, or host configuration directories.
-Runtime binaries must be provisioned under an approved system/runtime prefix; a
-runtime under a user home directory is `unsupported`, rather than making that
-home visible. Python, JavaScript, Go, and Cargo/Rust have Coordinator-owned
-adapters; TypeScript needs the approved `tsx` runtime. Java (Maven/Gradle),
-C/C++ (CMake), CUDA, ArkTS and ELP remain intentionally `unsupported` until
-their dedicated adapter validates its project metadata and public entrypoint.
-Never substitute a guessed shell command or run unsandboxed merely to improve
-coverage.
+`agent-executed` is FM-Agent-compatible quick mode, not a sandbox guarantee.
+The Worker may execute project-scoped commands for any registered language,
+including Python, JavaScript/TypeScript, Go, Rust, Java, C/C++, CUDA, ArkTS,
+and Erlang. It must select the project's actual toolchain, and when a required
+SDK, device, compiler, dependency cache, or public entry point is absent it
+must write `unsupported/inconclusive`, not a false negative. It must not use
+`sudo`, install packages, alter Git state or
+read unrelated user files; it must build only from its private attempt
+workspace rather than a shared project-root output directory, and its report
+must retain exact command evidence.
+Use `bug_validation_execution: adapter` only when the controlled local adapter
+is required: that mode uses Bubblewrap, fixed argv, no network, a read-only
+project and private scratch, but recognizes fewer ecosystems.
 
 ## Host-coordinated state machine
 
 The dynamic lifecycle is driven by `bug_validation_executor.py`, not a manual
 sequence of ad-hoc runner calls. It never invokes an Agent itself. Instead it
 returns an exact `host_worker` request for the active Codex/Claude Coordinator
-at the preparation and finalization boundaries. The Coordinator must invoke the
+at the preparation, execution, and finalization boundaries. The Coordinator must invoke the
 named Worker through its native subagent mechanism, then return its compact
 receipt to the state machine. The state machine owns admission, contract
-validation, optional build evidence, sandbox execution, retry/requeue, receipt
+validation, execution evidence, retry/requeue, receipt
 validation, and the terminal summary.
 
-The Coordinator must process exactly one returned action at a time. After a
-Worker receipt, call `next`; after `run_dynamic`, call `run-dynamic`; after a
-finalization receipt, call `submit-finalization`. Never infer completion from a
-report path and never launch the next Worker before the executor returns its
-request.
+For each job, the Coordinator must process exactly one returned action at a
+time. Independent admitted Bug Validator jobs may progress concurrently. After
+a preparation or execution Worker receipt, call `next`; adapter mode alone uses
+`run-dynamic`; after a finalization receipt, call `submit-finalization`. Never infer completion from a
+report path and never launch the next Worker for that job before the executor
+returns its request.
 
 The probe must be self-contained, avoid network access and unrelated file I/O,
 use a public entry point rather than an internal module, catch errors, and print
