@@ -47,4 +47,5 @@ record at least one exact implementation observation, and set `confidence` to
 `low`; do not silently promote the implementation into a contract. Do not
 change the source copy. Do not write `fm_agent_skill/`,
 business source, or another worker's sidecars; do not spawn agents. Return JSON
-with `job_id`, `status`, `outputs`, and completed artifact paths.
+with `job_id`, `status`, and `outputs` exactly equal to the dispatch ticket's
+`write_paths`; do not add completed artifact paths as another receipt field.

@@ -106,7 +106,7 @@ def _layer_files(target: Path) -> list[Path]:
 def _specification(target: Path, record: dict, phase: str) -> dict:
     selected = _selected(target, record, phase)
     expected = {item["artifact"] for item in selected}
-    batch_size = _config(target, record).get("spec_batch_size", 1)
+    batch_size = _config(target, record).get("spec_batch_size", 8)
     if not isinstance(batch_size, int) or batch_size < 1:
         raise ValueError("spec_batch_size must be a positive integer")
     created = 0

@@ -48,4 +48,4 @@ to `{"affected_callee_ids":["..."],"reason":"..."}`. For `ERROR`, leave
 Include the supplied immutable `snapshot_commit`. Do not write
 `fm_agent_skill/`, business source, specifications, or other results; do not
 spawn agents. Return only a compact receipt with `job_id`, `status`, `verdict`,
-and output path.
+and `outputs` exactly equal to the dispatch ticket's `write_paths` array.

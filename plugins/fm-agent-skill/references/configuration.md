@@ -14,11 +14,13 @@ reusing specifications built for a different scope or knowledge set.
 
 `scheduler_executor` is fixed to `host-subagent`: semantic work uses the active
 Claude Code or Codex subagent facility. The enforced default profile is ten
-active workers globally, two specification batches, four verification workers,
+active workers globally, four specification batches, eight verification workers,
 two Bug Validators, and two read-only incremental plan workers. Configure these
 through `max_active_subagents`, `spec_concurrency`, `verify_concurrency`,
 `bug_validation_concurrency`, and `read_only_plan_concurrency`.
-`spec_batch_size` defaults to `1`; `bug_validation_max_attempts` defaults to
+`spec_batch_size` defaults to `8`; one Specification Worker therefore shares
+the phase/domain context for up to eight functions while still writing one
+independently validated sidecar pair per function. `bug_validation_max_attempts` defaults to
 `5` for runtime failures, and `bug_validation_negative_retries` defaults to
 `2` additional completed negative probes. These scheduling and retry
 limits are operational only and are excluded from the analysis fingerprint.

@@ -17,11 +17,21 @@ is the admission point: it atomically rejects a job when its global or
 type-specific capacity is full. Never launch a worker merely because it was
 previously listed as ready.
 
+For `specification`, `verification`, and `verify_affected`, the Coordinator
+must use `semantic_executor.py prepare/dispatch/submit` instead of calling those
+scheduler transitions directly. The executor removes unassigned result files,
+short-circuits low-confidence verification to a validated `INCONCLUSIVE`, and
+issues an exact dispatch ticket before acquiring each lease. Never use a
+generated JavaScript/Dynamic Workflow for these jobs, ask an Agent to parse the
+plan, or reproduce a Worker prompt in workflow source.
+
 The worker writes detailed evidence only to its assigned artifact or, for an
 incremental plan, to `fm_agent_skill/worker_reports/<job-id>.json`. Its final
 response is a JSON receipt of at most 4 KiB with `job_id`, `status`, output
 paths, counts, an optional verdict, and at most a one-sentence summary. The
-Coordinator passes that receipt to `scheduler.py complete`; it does not paste
+receipt `outputs` must exactly equal the job's `required_outputs`. The
+Coordinator passes planned-phase receipts to `semantic_executor.py submit` and
+other receipts to `scheduler.py complete`; it does not paste
 worker reasoning or source excerpts into its own context. Every new
 `verify_function` job owns exactly one extracted artifact and its matching
 result path. `complete` validates the schema-v2 A→B result immediately; a bare
@@ -56,6 +66,10 @@ small aggregate record at `fm_agent_skill/control/phase_receipts/<phase>.json`.
 The Coordinator reads that receipt, then reads detailed artifacts only for an
 escalation (`MISMATCH`, `DEPENDENCY_RISK`, `INCONCLUSIVE`, `ERROR`, or worker
 failure) before its normal gate.
+Deterministic low-confidence shortcuts contribute to the receipt's
+`INCONCLUSIVE` outcome count and `deterministic_shortcuts`, but are not expanded
+into per-job escalations because their evidence gap is identical and no Worker
+ran.
 
 ## Worker mapping
 
@@ -66,7 +80,7 @@ failure) before its normal gate.
 | domain context generation | `fm-domain-context-worker` | after valid phases |
 | static edge resolution without CodeGraph | `fm-agent-static-edge-worker` | one bounded candidate, then deterministic validation |
 | specification batch generation | `fm-spec-batch-worker` | same layer batches in parallel |
-| function Hoare reasoner | `fm-verify-function-worker` | one ready function per job |
+| function Hoare reasoner | `fm-verify-function-worker` | one high-confidence ready function per job; low-confidence contracts are deterministically inconclusive |
 | Bug Validator | `fm-bug-validate-worker` | one direct `MISMATCH` per job |
 | incremental module selection | `fm-select-relevant-modules-worker` | one job |
 | incremental file selection | `fm-select-relevant-files-worker` | after module selection |

@@ -94,6 +94,10 @@ def _validate_report(job, result):
     if result.get("job_id") != job["id"]: return "worker report job_id does not match manifest"
     if not isinstance(result.get("status"), str) or not result["status"].strip(): return "worker report requires non-empty status"
     if "outputs" in result and (not isinstance(result["outputs"], list) or not all(isinstance(item, str) for item in result["outputs"])): return "worker report outputs must be a string array"
+    if "outputs" in result and result["outputs"] != job.get("required_outputs", []):
+        return "worker report outputs must exactly match the manifest required_outputs"
+    if job["type"] in {"domain_context", "spec_batch", "verify_function"} and result.get("outputs") != job.get("required_outputs", []):
+        return f"{job['type']} report must include the exact manifest required_outputs"
     if "verdict" in result and result["verdict"] not in state.VERDICTS: return "worker report has invalid verdict"
     if "summary" in result and (not isinstance(result["summary"], str) or len(result["summary"]) > 500): return "worker report summary must be at most 500 characters"
     if job["type"] == "bug_validate":
@@ -222,15 +226,20 @@ def phase_receipt(target, phase):
     jobs = [job for job in jobs if isinstance(job, dict) and job.get("phase") == phase]
     totals = {status: sum(1 for job in jobs if job.get("status") == status) for status in ("queued", "running", "retryable", "failed", "succeeded")}
     escalations = []
+    outcomes = {verdict: 0 for verdict in sorted(state.VERDICTS)}
+    deterministic_shortcuts = 0
     for job in jobs:
         result = job.get("result", {}) if isinstance(job.get("result"), dict) else {}
         verdict = result.get("verdict")
+        if verdict in outcomes: outcomes[verdict] += 1
+        shortcut = result.get("counts", {}).get("deterministic_shortcut") == 1 if isinstance(result.get("counts"), dict) else False
+        if shortcut: deterministic_shortcuts += 1
         reason = None
         if job.get("status") in {"failed", "retryable"}: reason = job.get("failure_class", job.get("status"))
-        elif verdict in {"MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"}: reason = verdict
+        elif verdict in {"MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"} and not shortcut: reason = verdict
         elif result.get("escalation") not in {None, "", "none", "NONE", False}: reason = "worker_escalation"
         if reason: escalations.append({"job_id": job.get("id"), "type": job.get("type"), "reason": reason})
-    receipt = {"schema_version": 1, "phase": phase, "generated_at": state.now(), "totals": totals, "gate_ready": totals["queued"] == totals["running"] == totals["retryable"] == totals["failed"] == 0, "escalations": escalations}
+    receipt = {"schema_version": 1, "phase": phase, "generated_at": state.now(), "totals": totals, "outcomes": outcomes, "deterministic_shortcuts": deterministic_shortcuts, "gate_ready": totals["queued"] == totals["running"] == totals["retryable"] == totals["failed"] == 0, "escalations": escalations}
     path = state.control_dir(target) / "phase_receipts" / f"{phase}.json"; state.atomic_json(path, receipt)
     return {"receipt_path": path.relative_to(target).as_posix(), **receipt}
 def transition(target, job_id, action, result, message, failure_class):

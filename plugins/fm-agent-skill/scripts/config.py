@@ -16,7 +16,7 @@ DEFAULTS = {
     "verify_concurrency": 8,
     "bug_validation_concurrency": 2,
     "read_only_plan_concurrency": 2,
-    "spec_batch_size": 1, "bug_validation_max_attempts": 5, "bug_validation_negative_retries": 2,
+    "spec_batch_size": 8, "bug_validation_max_attempts": 5, "bug_validation_negative_retries": 2,
     "bug_validation_execution": "agent-executed",
     "probe_adapter": "auto",
     "granularity": 40, "retries": 5, "lock_ttl_seconds": 7200, "resume_grace_seconds": 600,

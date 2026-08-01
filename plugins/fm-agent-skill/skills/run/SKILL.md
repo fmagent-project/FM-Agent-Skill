@@ -19,6 +19,13 @@ task inline. Read
 [agent-orchestration.md](../../references/agent-orchestration.md) before
 starting.
 
+Never create or run a Dynamic Workflow, generated JavaScript workflow, or
+another ad-hoc orchestration script for an FM-Agent semantic phase. Such a
+script cannot substitute for a registered Worker and must not restate, shorten,
+or reinterpret a Worker contract. Use the bundled deterministic semantic
+executor described below; this prohibition applies even when the host offers a
+Workflow tool.
+
 Before invoking a script, read [runtime-path.md](../../references/runtime-path.md)
 and resolve `FM_AGENT_SKILL_ROOT`; never use `CLAUDE_SKILL_DIR`.
 
@@ -183,16 +190,17 @@ and edge data into Skill control state. Supply the same file to both
 
 Before each phase emit the required `Stage current/total` status, then call
 `pipeline.py phase-start`. Every semantic job manifest must include its current
-pipeline `phase`. Use `scheduler.py admissible` to obtain a capacity-compatible
-candidate, then call `scheduler.py start` immediately before launching exactly
-that mapped worker with the host subagent mechanism. `start` is the enforced
-lease: if it rejects capacity, do not launch the worker; wait for a completion
-and obtain a fresh admissible list. Never pre-launch a batch from `ready`.
+pipeline `phase`. For specification and verification, obtain leases only
+through `semantic_executor.py`; do not call `scheduler.py start` or
+`scheduler.py complete` directly. For the remaining named jobs, use
+`scheduler.py admissible`, call `scheduler.py start` immediately before the
+host subagent, and pass its receipt to `scheduler.py complete`. Never launch a
+job merely because it appeared in `ready`.
 
-Give a worker only its job manifest inputs and direct evidence. It writes full
-evidence to its assigned output and returns a ≤4 KiB JSON receipt with matching
-`job_id`, `status`, output paths, optional verdict/counts, and one-sentence
-summary. Call `scheduler.py complete` only after its outputs validate. After
+Give a worker only its dispatch-ticket inputs and direct evidence. It writes
+full evidence to its assigned output and returns a ≤4 KiB JSON receipt with
+matching `job_id`, `status`, the exact manifest `required_outputs`, optional
+verdict/counts, and one-sentence summary. After
 joining the jobs required by a phase, call
 `scheduler.py phase-receipt --project "$PROJECT" --phase "$PHASE"`; use that
 small receipt as the normal fan-in. Read detailed worker artifacts only for
@@ -251,14 +259,60 @@ Use it for full `specification`, full `verification`, incremental
 `verify_affected`, and `bug_validation`. Incremental `update_specs` retains its
 read-only plan/apply/reconcile workflow described below. For specification it registers every
 selected function across every project phase and caller-first layer before the
-first Worker starts, splitting by `spec_batch_size` (default one). For later
+first Worker starts, splitting by `spec_batch_size` (default eight). For later
 phases it registers every selected function or direct candidate. Do not create
 these jobs manually or defer creation of later layers. The resulting
 `fm_agent_skill/control/job_plans/<phase>.json` must cover the entire current
 scope before that phase gate can pass.
 
-For each specification job, provide only the assigned extracted artifacts and
-permitted user-requirement, public-API, and caller-contract evidence. Generated
+For `specification`, `verification`, and `verify_affected`, immediately prepare
+the deterministic semantic execution after planning:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/semantic_executor.py" prepare \
+  --project "$PROJECT" --phase "$PHASE"
+```
+
+Preparation removes only unassigned verification JSON from the private
+snapshot and completes every valid low-confidence verification job as
+`INCONCLUSIVE` without launching a host Worker. It never derives `MATCH` or
+`MISMATCH`. A zero `worker_jobs_remaining` means no semantic subagent is needed.
+
+Lease remaining work in a host-sized bounded group:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/semantic_executor.py" dispatch \
+  --project "$PROJECT" --phase "$PHASE" --limit <HOST_SLOTS>
+```
+
+Each dispatch names the exact registered Worker, immutable Worker-definition
+hash, job manifest, allowed read paths, and exact write paths. Invoke those
+registered workers directly with the host's native subagent facility. If the
+host cannot select a registered worker by name, launch a fresh subagent with
+only this fixed instruction: `Read the dispatch ticket and worker_definition
+completely and execute them exactly.` Never paste or paraphrase the contract,
+ask an Agent to read the job plan, generate a Workflow script, or launch more
+workers than returned tickets.
+
+Replace `<HOST_SLOTS>` with a positive integer no larger than the host's
+currently available native subagent slots or the configured phase cap.
+
+Submit each compact receipt only through:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/semantic_executor.py" submit \
+  --project "$PROJECT" --job-id "$JOB_ID" --receipt-json "$RECEIPT_JSON"
+```
+
+An invalid artifact or receipt returns `retry_required`; call
+`semantic_executor.py retry --job-id "$JOB_ID"` before obtaining a new ticket.
+Report a timeout or tool failure through `semantic_executor.py fail`. Request
+another dispatch only after every previously leased ticket was submitted or
+failed. Finish with `semantic_executor.py phase-receipt`; `wait_or_finish` is
+not itself proof that the phase gate passed.
+
+For each specification job, use only the ticket's assigned extracted artifacts
+and permitted user-requirement, public-API, and caller-contract evidence. Generated
 domain context is observation-only. Do not read test files. Require
 the worker to emit normative evidence, observations, and confidence in every
 spec sidecar; never schedule a `MATCH` from a low-confidence,
@@ -287,9 +341,9 @@ an accepted incremental-plan report only through:
 
 When an Agent call fails, classify it before scheduling anything downstream.
 `execution` (timeout, rate limit, tool crash), `output` (missing or invalid
-artifact), and `interrupted` are retryable. Call `scheduler.py fail` with that
-class; if its status is `retryable`, wait 10 seconds and call
-`scheduler.py retry`, retaining the same job id and stopping at configured
+artifact), and `interrupted` are retryable. For specification and verification,
+use `semantic_executor.py fail/retry`; for other jobs use `scheduler.py
+fail/retry`. Retain the same job id and stop at configured
 `retries`. For a spec layer with any newly valid sidecar, retry remaining
 batches immediately; wait 10 seconds only when it made no progress. A retried
 spec batch preserves valid paired sidecars and repairs only incomplete assigned

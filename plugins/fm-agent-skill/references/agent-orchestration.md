@@ -24,9 +24,10 @@ target-project path from the Skill's installation or marketplace packaging.
 Give each worker only the exact allowed output paths from its job manifest.
 
 For every phase, call `pipeline.py phase-start`, create phase-labelled jobs,
-use `scheduler.py admissible`, then `scheduler.py start` to acquire each
-bounded worker slot before launching it. Join required jobs and validate their
-small receipts through `scheduler.py complete`. Next create
+then acquire a bounded worker slot before launching it. Specification and
+verification must use `semantic_executor.py`; other jobs use
+`scheduler.py admissible/start/complete`. Join required jobs and validate their
+small receipts through the same owner that issued the lease. Next create
 `scheduler.py phase-receipt --phase <phase>` and inspect only its counts and
 escalations before calling `pipeline.py phase-complete`. On success use
 `pipeline.py complete`; on a terminal failure use `pipeline.py fail`. An
@@ -34,11 +35,17 @@ explicit resume continues the single `active.json` analysis and its first
 incomplete phase; it does not make a new analysis identity or repeat valid work.
 
 Keep the Coordinator as a control plane, not a second reasoning worker. Give a
-semantic worker only its assigned artifacts plus direct evidence; never give it
+semantic worker only its immutable dispatch ticket, registered Worker
+definition, assigned artifacts, and direct evidence; never give it
 the whole repository or a prior worker transcript. Workers cannot spawn other
 workers. Detailed worker output belongs in the assigned artifact; their final
 response is a short structured receipt. Read detailed artifacts only for a
 receipt escalation or a required deterministic validation.
+
+Do not use a host Dynamic Workflow or generated JavaScript to implement a
+semantic phase. It is not a registered Worker, cannot rewrite output paths, and
+must not paraphrase Worker schemas. Parallelism comes only from concurrently
+invoking the exact tickets returned by `semantic_executor.py dispatch`.
 
 ## Deterministic executor
 
