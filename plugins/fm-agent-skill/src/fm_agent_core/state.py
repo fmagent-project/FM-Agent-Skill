@@ -24,6 +24,14 @@ from .languages import source_extensions
 SOURCE_EXTENSIONS = source_extensions()
 METADATA_SIDECAR_SUFFIXES = (".spec.json", ".info.json")
 VERDICTS = {"MATCH", "MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"}
+VERIFICATION_FIELDS = {
+    "schema_version", "function_id", "snapshot_commit", "verdict",
+    "reasoning", "gaps", "error",
+}
+POSTCONDITION_REASONING_FIELDS = {
+    "actual_postcondition", "spec_postcondition", "counterexample",
+    "offending_statements", "reason",
+}
 BUG_ATTEMPT_CLASSIFICATIONS = {"confirmed", "not_reproduced", "inconclusive"}
 BUG_FINAL_STATUSES = {"confirmed", "rejected", "inconclusive"}
 SPEC_FIELDS = {
@@ -555,6 +563,81 @@ def specification_artifacts_ready(project: Path, functions: list[dict], submodul
     return True, ""
 
 
+def _nonempty_text(value, limit: int = 8000) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= limit
+
+
+def _postcondition_reasoning_ready(artifact: Path, spec: dict, reasoning, mismatch: bool) -> tuple[bool, str]:
+    if not isinstance(reasoning, dict) or set(reasoning) != POSTCONDITION_REASONING_FIELDS:
+        return False, "MATCH/MISMATCH requires exact structured postcondition reasoning"
+    actual = reasoning.get("actual_postcondition")
+    required = reasoning.get("spec_postcondition")
+    counterexample = reasoning.get("counterexample")
+    statements = reasoning.get("offending_statements")
+    reason = reasoning.get("reason")
+    if not _nonempty_text(actual) or required != spec.get("post_condition"):
+        return False, "reasoning must contain an actual postcondition and the exact specification postcondition"
+    if not isinstance(reason, str) or len(reason) > 8000:
+        return False, "reasoning reason must be a bounded string"
+    if mismatch:
+        if not all(_nonempty_text(value) for value in (counterexample, statements, reason)):
+            return False, "MISMATCH requires a concrete counterexample, exact offending statements, and reason"
+        source = artifact.read_text(encoding="utf-8", errors="replace")
+        if statements not in source:
+            return False, "MISMATCH offending statements are not an exact quote from the extracted function"
+    elif counterexample is not None or statements is not None:
+        return False, "MATCH cannot contain a counterexample or offending statements"
+    return True, ""
+
+
+def verification_result_ready(project: Path, artifact: Path, function_id: str, result, snapshot_commit: str | None = None) -> tuple[bool, str]:
+    """Validate one auditable A→B reasoner result before it can affect state."""
+    if not artifact.is_file():
+        return False, "verification input artifact is missing"
+    sidecars_ok, sidecars_reason = sidecars_ready(artifact)
+    if not sidecars_ok:
+        return False, f"verification input is invalid: {sidecars_reason}"
+    if not isinstance(result, dict) or set(result) != VERIFICATION_FIELDS or result.get("schema_version") != 2:
+        return False, "verification result does not match schema version 2"
+    if result.get("function_id") != function_id:
+        return False, "verification function identity mismatch"
+    if result.get("snapshot_commit") != (snapshot_commit or current_snapshot_commit(project)):
+        return False, "verification snapshot mismatch"
+    verdict = result.get("verdict")
+    if verdict not in VERDICTS:
+        return False, "verification verdict is invalid"
+    spec = read_json(Path(f"{artifact}.spec.json"), None)
+    confidence = spec_confidence(artifact)
+    if verdict in {"MATCH", "MISMATCH"}:
+        if confidence != "high":
+            return False, f"low-confidence specification cannot prove {verdict}"
+        if result.get("gaps") is not None or result.get("error") is not None:
+            return False, f"{verdict} must use structured reasoning rather than gaps/error"
+        return _postcondition_reasoning_ready(artifact, spec, result.get("reasoning"), verdict == "MISMATCH")
+    if result.get("reasoning") is not None:
+        return False, f"{verdict} cannot claim a completed postcondition proof"
+    if verdict == "INCONCLUSIVE":
+        gaps = result.get("gaps")
+        if result.get("error") is not None or not isinstance(gaps, dict) or set(gaps) != {"missing_evidence", "reason"}:
+            return False, "INCONCLUSIVE requires missing_evidence and reason"
+        missing = gaps.get("missing_evidence")
+        if not isinstance(missing, list) or not missing or len(missing) > 50 or not all(_nonempty_text(item, 2000) for item in missing) or not _nonempty_text(gaps.get("reason")):
+            return False, "INCONCLUSIVE evidence gaps must be non-empty"
+        return True, ""
+    if verdict == "DEPENDENCY_RISK":
+        gaps = result.get("gaps")
+        if result.get("error") is not None or not isinstance(gaps, dict) or set(gaps) != {"affected_callee_ids", "reason"}:
+            return False, "DEPENDENCY_RISK requires affected_callee_ids and reason"
+        callees = gaps.get("affected_callee_ids")
+        known = {item.get("id") for item in (source_index(project) or {}).get("functions", []) if isinstance(item, dict)}
+        if not isinstance(callees, list) or not callees or len(callees) > 100 or function_id in callees or not all(isinstance(item, str) and item in known for item in callees) or not _nonempty_text(gaps.get("reason")):
+            return False, "DEPENDENCY_RISK must name known, distinct callees"
+        return True, ""
+    if result.get("gaps") is not None or not _nonempty_text(result.get("error")):
+        return False, "ERROR requires a non-empty error and no reasoning/gaps"
+    return True, ""
+
+
 def function_artifacts_ready(project: Path, functions: list[dict], submodules: list[str] | None = None, snapshot_commit: str | None = None) -> tuple[bool, str]:
     extracted = fm_dir(project) / "extracted_functions"
     results = fm_dir(project) / "logic_verification_results"
@@ -575,14 +658,9 @@ def function_artifacts_ready(project: Path, functions: list[dict], submodules: l
             return False, f"incomplete specification for {function_id}: {sidecars_reason}"
         result_path = results / (str(Path(rel).with_suffix(".json")))
         result = read_json(result_path, None)
-        if not isinstance(result, dict) or result.get("verdict") not in VERDICTS:
-            return False, f"missing or invalid verification result for {function_id}"
-        if result.get("function_id") != function_id:
-            return False, f"verification function identity mismatch for {function_id}"
-        if result.get("snapshot_commit") != (snapshot_commit or current_snapshot_commit(project)):
-            return False, f"verification snapshot mismatch for {function_id}"
-        if result.get("verdict") == "MATCH" and spec_confidence(artifact) != "high":
-            return False, f"low-confidence specification cannot prove MATCH for {function_id}"
+        result_ok, result_reason = verification_result_ready(project, artifact, function_id, result, snapshot_commit)
+        if not result_ok:
+            return False, f"invalid verification result for {function_id}: {result_reason}"
     actual_artifacts = _current_function_artifacts(extracted, submodules)
     actual_results = {path.relative_to(results).as_posix() for path in results.rglob("*.json") if _in_selected_scope(path.relative_to(results).with_suffix("").as_posix(), submodules)} if results.is_dir() else set()
     stale_artifacts = actual_artifacts - expected_artifacts
@@ -601,29 +679,27 @@ def selected_verification_ready(project: Path, functions: list[dict]) -> tuple[b
         rel, function_id = item.get("artifact"), item.get("id")
         if not all(isinstance(value, str) for value in (rel, function_id)):
             return False, "selected function lacks artifact identity"
-        result = read_json(results / Path(rel).with_suffix(".json"), {})
-        if result.get("function_id") != function_id or result.get("snapshot_commit") != current_snapshot_commit(project) or result.get("verdict") not in VERDICTS:
-            return False, f"missing or stale selected verification result for {function_id}"
         artifact = fm_dir(project) / "extracted_functions" / rel
-        if result.get("verdict") == "MATCH" and spec_confidence(artifact) != "high":
-            return False, f"low-confidence specification cannot prove MATCH for {function_id}"
+        result = read_json(results / Path(rel).with_suffix(".json"), {})
+        result_ok, result_reason = verification_result_ready(project, artifact, function_id, result)
+        if not result_ok:
+            return False, f"invalid selected verification result for {function_id}: {result_reason}"
     return True, ""
 
 
 def direct_mismatch_ids(project: Path, selected_ids: set[str] | None = None) -> set[str]:
-    """Return current-snapshot direct verification candidates only."""
+    """Return only current, schema-valid, externally grounded direct candidates."""
     results = fm_dir(project) / "logic_verification_results"
-    current = current_snapshot_commit(project)
     found = set()
-    for path in results.rglob("*.json") if results.is_dir() else []:
-        result = read_json(path, {})
-        function_id = result.get("function_id") if isinstance(result, dict) else None
-        if (
-            result.get("verdict") == "MISMATCH"
-            and result.get("snapshot_commit") == current
-            and isinstance(function_id, str)
-            and (selected_ids is None or function_id in selected_ids)
-        ):
+    for item in (source_index(project) or {}).get("functions", []):
+        function_id = item.get("id") if isinstance(item, dict) else None
+        rel = item.get("artifact") if isinstance(item, dict) else None
+        if not isinstance(function_id, str) or not isinstance(rel, str) or (selected_ids is not None and function_id not in selected_ids):
+            continue
+        artifact = fm_dir(project) / "extracted_functions" / rel
+        result = read_json(results / Path(rel).with_suffix(".json"), {})
+        valid, _ = verification_result_ready(project, artifact, function_id, result)
+        if valid and result.get("verdict") == "MISMATCH":
             found.add(function_id)
     return found
 

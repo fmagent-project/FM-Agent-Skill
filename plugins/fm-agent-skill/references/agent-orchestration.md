@@ -15,8 +15,8 @@ This is a host-native Coordinator, not the original FM-Agent process: it must
 use Codex or Claude Code's internal subagent mechanism and must never invoke
 `FM-Agent/main.py`, import its pipeline, or call its remote-LLM API. For Bug
 Validator jobs, `bug_validation_executor.py` supplies the deterministic next
-action and invokes local safe runners; the host supplies only its preparation
-and finalization Worker calls.
+action and invokes local safe runners in adapter mode; the host supplies its
+preparation, default agent-executed execution, and finalization Worker calls.
 
 Use only two target-project output roots: `fm_agent/` for FM-Agent-compatible
 analysis artifacts and `fm_agent_skill/` for mutable Skill state. Derive no

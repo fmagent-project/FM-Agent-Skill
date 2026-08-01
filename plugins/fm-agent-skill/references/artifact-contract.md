@@ -89,12 +89,20 @@ layers}`. `source_files` must match its phase's declared source files. Each
 layer function has at least `function_id`, `artifact`, and `source_file`; a
 function occurs in one phase-layer artifact only.
 
-Verification result: `{function, function_id, snapshot_commit, verdict, gaps?,
-error?}`. `MISMATCH` means a local implementation/spec violation;
+Verification result is exactly
+`{schema_version,function_id,snapshot_commit,verdict,reasoning,gaps,error}` with
+`schema_version: 2`. `MATCH` and `MISMATCH` require `reasoning` exactly equal to
+`{actual_postcondition,spec_postcondition,counterexample,offending_statements,reason}`.
+The specification postcondition must equal the sidecar text. `MISMATCH` also
+requires a high-confidence specification, non-empty concrete counterexample,
+reason, and an exact contiguous source quote in `offending_statements`;
+`MATCH` requires high confidence and null counterexample/offending statements.
+`MISMATCH` means a local implementation/spec violation;
 `DEPENDENCY_RISK` means a caller is affected by a callee mismatch but has no
-independently established local violation. `INCONCLUSIVE` records that the
-available contract is observation-only/low-confidence and cannot prove a
-match. Identity and snapshot commit must match the current analysis worktree.
+independently established local violation and uses
+`gaps:{affected_callee_ids,reason}`. `INCONCLUSIVE` uses
+`gaps:{missing_evidence,reason}`. `ERROR` carries a non-empty `error`. Identity
+and snapshot commit must match the current analysis worktree.
 
 Finding/bug result records at least `{function_id, snapshot_commit,
 confirmation_status, attempts}` plus the specification claim, implementation

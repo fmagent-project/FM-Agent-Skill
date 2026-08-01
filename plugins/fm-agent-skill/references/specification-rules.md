@@ -20,10 +20,10 @@ When no such external support exists, record the current code fact under
 `observations` with kind `implementation`, leave `normative_evidence` empty,
 and use `confidence: "low"`. It is a lead for review,
 not a proved behavioral requirement. A low-confidence sidecar must never yield
-`MATCH`: verification returns `INCONCLUSIVE` unless it can establish a direct
-contradiction from externally supported facts. Do not infer that a constant,
-comparison, or formula is intended merely because the current implementation
-uses it.
+`MATCH` or `MISMATCH`: verification returns `INCONCLUSIVE` because there is no
+externally grounded B against which actual postcondition A can be proved or
+refuted. Do not infer that a constant, comparison, or formula is intended
+merely because the current implementation uses it.
 
 Do not read tests when extracting, planning phases, generating specifications,
 or verifying functions. This matches FM-Agent's source-analysis scope: tests

@@ -19,7 +19,11 @@ incremental plan, to `fm_agent_skill/worker_reports/<job-id>.json`. Its final
 response is a JSON receipt of at most 4 KiB with `job_id`, `status`, output
 paths, counts, an optional verdict, and at most a one-sentence summary. The
 Coordinator passes that receipt to `scheduler.py complete`; it does not paste
-worker reasoning or source excerpts into its own context. Workers never write
+worker reasoning or source excerpts into its own context. Every new
+`verify_function` job owns exactly one extracted artifact and its matching
+result path. `complete` validates the schema-v2 A→B result immediately; a bare
+or weakly evidenced `MISMATCH` becomes an output retry and cannot enter Bug
+Validator. Workers never write
 job manifests, phase receipts, locks, or other control state.
 
 Retain the same job id for retries. `execution`, `output`, and `interrupted`

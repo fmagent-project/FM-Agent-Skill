@@ -342,7 +342,12 @@ Build native phase-layer artifacts after a valid `phases.json`:
 
 Write `MISMATCH` only for a function's own specification violation. If the
 function is affected solely by a mismatching callee, write `DEPENDENCY_RISK`
-with the affected callee IDs and do not send it to Bug Validator. Before the
+with the affected callee IDs and do not send it to Bug Validator. Require the
+Verification Worker to derive actual postcondition A and return the exact
+schema-v2 structured A→B result from `artifact-contract.md`. A `MISMATCH`
+without high-confidence B, a concrete counterexample, non-empty reason, and an
+exact offending source quote is an invalid worker output: retry it and never
+schedule it for Bug Validator. Before the
 first direct candidate, detect and record the safe build adapter:
 
 ```bash

@@ -13,8 +13,12 @@ real evidence.
 ## Preparation pass
 
 Read the assigned verification result, production source, extracted artifact,
-and permitted call-graph evidence. Find the smallest public entry point that
-can reach the candidate. Do not import internal implementation files directly.
+and permitted call-graph evidence. Treat its structured `reasoning` fields as
+the candidate oracle: `spec_postcondition` is expected behavior,
+`actual_postcondition` is the reasoned implementation behavior, and
+`counterexample` plus `offending_statements` identify the trigger. Reject a
+candidate that lacks these validated fields. Find the smallest public entry
+point that can reach the candidate. Do not import internal implementation files directly.
 Write only inside the assigned immutable attempt directory:
 
 ```text

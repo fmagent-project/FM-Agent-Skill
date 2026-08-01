@@ -1,13 +1,16 @@
 # Bug validation
 
-A direct reasoning `MISMATCH` is a candidate, never a confirmed defect. Do not
+A schema-v2 direct reasoning `MISMATCH` is a candidate only after the gate has
+validated high-confidence specification B, reasoned actual postcondition A, a
+concrete `A ∧ ¬B` counterexample, and an exact offending source quote. It is
+never a confirmed defect. Do not
 read project tests or run the full test suite. Instead, reproduce the candidate
 through the production package's public entry point with one minimal generated
 probe. `DEPENDENCY_RISK` is not a bug candidate.
 
 ## Evidence levels
 
-Code/spec reasoning creates the candidate. A build or syntax probe only checks
+Structured code/spec reasoning creates the candidate. A build or syntax probe only checks
 that a snapshot is buildable; it is not behavioral evidence. Only an executed
 minimal probe whose actual output differs from the externally evidenced contract
 may produce `confirmed`.

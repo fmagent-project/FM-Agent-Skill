@@ -21,6 +21,11 @@ no-op detection, and explicit safe resume of interrupted analyses.
   call-graph artifacts.
 - Compare implementations with specifications, distinguishing direct violations
   (`MISMATCH`) from propagated dependency risks (`DEPENDENCY_RISK`).
+- Preserve FM-Agent's core postcondition reasoner: derive actual behavior A,
+  compare it with externally grounded specification B, and accept `MISMATCH`
+  only with a concrete `A ∧ ¬B` counterexample and exact source evidence.
+  Pre-schema-v2 verification artifacts are intentionally not reusable as a
+  baseline and cause the next ordinary analysis to rebuild them.
 - Build controlled isolated reproductions for eligible direct violations and
   report a confirmed defect only after actual dynamic evidence.
 - Keep schema-v2 normative evidence separate from implementation observations.
@@ -123,8 +128,9 @@ or rewires dependent jobs.
 This follows FM-Agent's worker semantics: phase planning and domain context
 retry after ten seconds; a specification layer immediately retries only its
 remaining batches after partial progress, but waits ten seconds after no
-progress. Valid sidecars are retained. A verification reasoning problem is a
-valid `ERROR` result rather than a scheduling retry. Bug Validator retries
+progress. Valid sidecars are retained. A well-formed verification `ERROR` is a
+terminal per-function reasoning result; a malformed structured reasoner output
+is retried as an output failure. Bug Validator retries
 runtime failures up to five attempts and repeats a completed negative result
 twice by default, preserving all three probes.
 

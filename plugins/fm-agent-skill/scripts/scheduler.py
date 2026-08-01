@@ -130,6 +130,20 @@ def _validate(target, job, result=None):
     if job["type"] == "domain_context":
         ok, reason = state.specification_context_ready(target)
         if not ok: return reason
+    if job["type"] == "verify_function" and not job.get("legacy_contract"):
+        if len(job.get("artifacts", [])) != 1: return "Verification Worker must own exactly one extracted artifact"
+        rel = job["artifacts"][0]
+        expected = f"fm_agent/logic_verification_results/{Path(rel).with_suffix('.json').as_posix()}"
+        if job.get("required_outputs") != [expected]: return "Verification Worker output does not match its artifact"
+        artifact = target / "fm_agent" / "extracted_functions" / rel
+        index = state.source_index(target) or {}
+        item = next((entry for entry in index.get("functions", []) if isinstance(entry, dict) and entry.get("artifact") == rel), None)
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str): return "Verification Worker artifact is absent from the current analysis index"
+        verification = state.read_json(target / expected, None)
+        valid, reason = state.verification_result_ready(target, artifact, item["id"], verification)
+        if not valid: return f"invalid Verification Worker result: {reason}"
+        if result is not None and result.get("verdict") != verification.get("verdict"):
+            return "Verification Worker receipt verdict does not match its result"
     if job["type"] == "bug_validate" and not job.get("legacy_contract"):
         report = state.read_json(target / job["bug_result_path"], {})
         attempts = report.get("attempts") if isinstance(report, dict) else None
@@ -174,6 +188,10 @@ def create(target, payload):
     if kind == "incremental_spec_plan" and not legacy_contract and outputs != [worker_report]: raise ValueError("incremental spec planning must write only its assigned worker report")
     bug_results = [item for item in outputs if item.startswith("fm_agent/bug_validation/") and item.endswith(".result.json")]
     if kind == "bug_validate" and not legacy_contract and len(bug_results) != 1: raise ValueError("Bug Validator must assign exactly one fm_agent/bug_validation/*.result.json output")
+    if kind == "verify_function" and not legacy_contract:
+        if len(artifacts) != 1: raise ValueError("Verification Worker must assign exactly one extracted artifact")
+        expected = f"fm_agent/logic_verification_results/{Path(artifacts[0]).with_suffix('.json').as_posix()}"
+        if outputs != [expected]: raise ValueError("Verification Worker must assign its matching result path")
     job = {"schema_version": 2, "id": job_id, "phase": phase, "type": kind, "status": "queued", "depends_on": deps, "required_outputs": outputs, "artifacts": [_artifact(item) for item in artifacts], "attempts": 0, "max_attempts": _limit(target, payload), "created_at": state.now(), "updated_at": state.now()}
     if legacy_contract: job["legacy_contract"] = True
     elif kind == "bug_validate": job.update({"bug_result_path": bug_results[0], "negative_max_attempts": _negative_attempts(target, payload), "negative_attempts": 0, "runtime_attempts": 0})

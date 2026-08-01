@@ -7,10 +7,14 @@ postcondition from source, current precondition, the current function's
 `.info.json` callee expectations, and domain context;
 pass that postcondition as the next block's precondition.
 
-Check each terminating block and the final block against the specification
-postcondition. A mismatch must retain the triggering statements, derived
-postcondition, and reason. Malformed spec, model/tool failure, or unparseable
-output is `ERROR`, not `MATCH` or `MISMATCH`; proceed with other functions.
+Check each terminating block and the final block by asking whether there exists
+a concrete valid input satisfying the derived actual postcondition A and
+violating the specification postcondition B. In logical form, `MISMATCH`
+requires `∃x. Pre(x) ∧ A(x) ∧ ¬B(x)`; `MATCH` requires the bounded reasoner to
+establish `∀x. Pre(x) → (A(x) → B(x))`. A mismatch must retain a concrete
+counterexample, one exact contiguous source quote, A, B, and the reason.
+Malformed spec, model/tool failure, or unparseable output is `ERROR`, not
+`MATCH` or `MISMATCH`; proceed with other functions.
 
 Before proving a result, inspect the sidecar's `confidence`,
 `normative_evidence`, and `observations`. `MATCH` requires a high-confidence
@@ -20,8 +24,11 @@ match; emit `INCONCLUSIVE` and name the missing external evidence. Do not turn
 an implementation constant, comparison, or formula into proof obligation
 without that support.
 
-Use at most `MAX_SPC_ITER = 5` attempts for a postcondition/spec check unless a
-smaller configured retry limit applies. Emit a verification JSON object matching
+The assigned Codex/Claude Worker is the reasoner; no local script calls a model
+API. It writes one structured postcondition/spec result. On invalid output the
+Coordinator requeues the same job under the configured retry bound (five total
+attempts by default); do not infer a verdict from prose. Emit a verification
+JSON object matching
 [artifact-contract.md](artifact-contract.md): `MATCH` for a proved check,
 `MISMATCH` for a reasoned local violation, `DEPENDENCY_RISK` when only a
 callee's direct mismatch affects the caller's outcome, `INCONCLUSIVE` for an
