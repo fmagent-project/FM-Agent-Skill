@@ -9,7 +9,7 @@
       "name": "fm-agent-skill",
       "source": "./plugins/fm-agent-skill",
       "description": "Skill-guided FM-Agent correctness-analysis workflow for Codex and Claude Code.",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "author": {
         "name": "FM-Agent"
       }

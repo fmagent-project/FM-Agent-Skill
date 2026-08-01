@@ -12,10 +12,10 @@ postcondition. A mismatch must retain the triggering statements, derived
 postcondition, and reason. Malformed spec, model/tool failure, or unparseable
 output is `ERROR`, not `MATCH` or `MISMATCH`; proceed with other functions.
 
-Before proving a result, inspect the sidecar's `confidence` and `evidence`.
-`MATCH` requires a `high`-confidence contract grounded in header/public API,
-domain knowledge, or caller evidence. A low-confidence,
-`implementation-derived` rule may guide investigation but cannot prove a
+Before proving a result, inspect the sidecar's `confidence`,
+`normative_evidence`, and `observations`. `MATCH` requires a high-confidence
+contract grounded in exact copied user requirements or non-generated public
+API documentation. A low-confidence implementation observation may guide investigation but cannot prove a
 match; emit `INCONCLUSIVE` and name the missing external evidence. Do not turn
 an implementation constant, comparison, or formula into proof obligation
 without that support.

@@ -66,6 +66,10 @@ def sandbox_command(target: Path, scratch: Path, command: list[str], adapter_env
             result += ["--dir", str(directory.parent)]
         result += ["--ro-bind", str(directory), str(directory)]
         mounted.append(directory)
+    # Debian/Ubuntu toolchains commonly invoke /bin/sh even though the sealed
+    # runtime is mounted at /usr/bin.  Recreate only that standard alias; do
+    # not expose the host's /bin mount or any broader filesystem tree.
+    result += ["--symlink", "usr/bin", "/bin"]
     result += [
         "--dir", "/project", "--ro-bind", str(target), "/project",
         "--bind", str(scratch), "/tmp", "--proc", "/proc", "--dev", "/dev",

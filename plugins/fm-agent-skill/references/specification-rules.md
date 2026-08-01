@@ -10,12 +10,15 @@ weaken the contract to document a bug.
 
 Treat implementation literals, comparison operators, branch thresholds, and
 formulas as observations, not contract facts. Promote one of them into a
-precondition or postcondition only when a header/public API, supplied domain
-knowledge, or caller requirement supports that rule. Record every
-contract claim in the sidecar's `evidence` array with its source and kind.
+precondition or postcondition only when copied user knowledge or a
+non-generated public API contract supports that rule. Record every contract
+claim in schema-v2 `normative_evidence` with an exact source quote. Generated
+engine/phase context is explicitly observational and cannot be cited as a
+requirement; caller evidence alone cannot form a high-confidence cycle.
 
-When no such external support exists, record the candidate rule as
-`implementation-derived` with `confidence: "low"`. It is a lead for review,
+When no such external support exists, record the current code fact under
+`observations` with kind `implementation`, leave `normative_evidence` empty,
+and use `confidence: "low"`. It is a lead for review,
 not a proved behavioral requirement. A low-confidence sidecar must never yield
 `MATCH`: verification returns `INCONCLUSIVE` unless it can establish a direct
 contradiction from externally supported facts. Do not infer that a constant,
@@ -64,7 +67,7 @@ source. Store its contract in paired sidecars instead:
 <unchanged extracted source>
 
 // fm_agent/extracted_functions/.../parse.cpp.spec.json
-{"signature":"parse(std::string_view)","pre_condition":"...","post_condition":"...","evidence":[{"kind":"header","source":"include/parse.hpp","claims":["rejects trailing input"]}],"confidence":"high"}
+{"schema_version":2,"signature":"parse(std::string_view)","pre_condition":"input is complete","post_condition":"rejects trailing input","normative_evidence":[{"kind":"public_api_contract","source":"include/parse.hpp","quote":"Rejects trailing input.","claims":["rejects trailing input"]}],"observations":[{"kind":"implementation","source":"src/parse.cpp","quote":"return parse_prefix(input);","claims":["implementation returns a parsed prefix"]}],"confidence":"high"}
 
 // fm_agent/extracted_functions/.../parse.cpp.info.json
 {"callees":[{"name":"...","signature":"...","pre_condition":"...","post_condition":"..."}]}

@@ -18,8 +18,11 @@ All mutable Skill state lives under `fm_agent_skill/`.
   files.
 - `fm_agent/spec_prompts/` contains required specification context:
   `system_prompt.md`, `domain_context/engine_overview.txt`, and one
-  `domain_context/phase_XX_types.txt` for every phase. Copy supplied domain
-  knowledge to `domain_context/user_knowledge/` with a manifest. Preserve the
+  `domain_context/phase_XX_types.txt` for every phase. Materialize supplied
+  domain knowledge through the deterministic knowledge command below.
+  `knowledge.py materialize` owns that directory and binds every copied
+  Markdown file to the active input hash and snapshot commit; semantic workers
+  must not create or replace these files. Preserve the
   generated caller-first batch prompts and their manifest under
   `batch_prompts_<project>_phaseXX/` so work is resumable.
 - `fm_agent/spec_prompts/phase_XX_topdown_layers.json` is one caller-first
@@ -60,8 +63,17 @@ All mutable Skill state lives under `fm_agent_skill/`.
 `<function>.<ext>.spec.json` is exactly:
 
 ```json
-{"signature":"...","pre_condition":"...","post_condition":"...","evidence":[{"kind":"header|domain_knowledge|caller|implementation-derived","source":"...","claims":["..."]}],"confidence":"high|low"}
+{"schema_version":2,"signature":"...","pre_condition":"...","post_condition":"...","normative_evidence":[{"kind":"user_requirement|public_api_contract|caller_contract","source":"repository-relative path or caller function id","quote":"exact source text","claims":["verbatim contract clause"]}],"observations":[{"kind":"implementation","source":"repository-relative production source","quote":"exact implementation text","claims":["observed behavior"]}],"confidence":"high|low"}
 ```
+
+`high` requires at least one exact `user_requirement` or
+`public_api_contract`; generated domain context and caller-only cycles are not
+authority. `low` has no normative evidence and at least one implementation
+observation. A normative claim must appear verbatim in the pre/postcondition.
+User requirements quote the copied files under
+`domain_context/user_knowledge/`; public API contracts quote non-generated
+documentation or source comments. Oracle markers such as `BUG:`, `FIXME:`,
+`TODO:`, seeded bugs, and known defects are rejected as normative evidence.
 
 `<function>.<ext>.info.json` is exactly `{"callees": [...]}`. Every callee is
 an object with string fields `name`, `signature`, `pre_condition`, and
@@ -81,7 +93,7 @@ Verification result: `{function, function_id, snapshot_commit, verdict, gaps?,
 error?}`. `MISMATCH` means a local implementation/spec violation;
 `DEPENDENCY_RISK` means a caller is affected by a callee mismatch but has no
 independently established local violation. `INCONCLUSIVE` records that the
-available contract is implementation-derived/low-confidence and cannot prove a
+available contract is observation-only/low-confidence and cannot prove a
 match. Identity and snapshot commit must match the current analysis worktree.
 
 Finding/bug result records at least `{function_id, snapshot_commit,

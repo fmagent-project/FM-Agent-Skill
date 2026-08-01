@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 
 from .languages import source_extensions
@@ -25,11 +26,22 @@ METADATA_SIDECAR_SUFFIXES = (".spec.json", ".info.json")
 VERDICTS = {"MATCH", "MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"}
 BUG_ATTEMPT_CLASSIFICATIONS = {"confirmed", "not_reproduced", "inconclusive"}
 BUG_FINAL_STATUSES = {"confirmed", "rejected", "inconclusive"}
-SPEC_FIELDS = {"signature", "pre_condition", "post_condition", "evidence", "confidence"}
+SPEC_FIELDS = {
+    "schema_version", "signature", "pre_condition", "post_condition",
+    "normative_evidence", "observations", "confidence",
+}
 CALLEE_FIELDS = {"name", "signature", "pre_condition", "post_condition"}
-EXTERNAL_EVIDENCE_KINDS = {"header", "domain_knowledge", "caller"}
-EVIDENCE_KINDS = EXTERNAL_EVIDENCE_KINDS | {"implementation-derived"}
+ROOT_NORMATIVE_EVIDENCE_KINDS = {"user_requirement", "public_api_contract"}
+NORMATIVE_EVIDENCE_KINDS = ROOT_NORMATIVE_EVIDENCE_KINDS | {"caller_contract"}
+OBSERVATION_KINDS = {"implementation"}
 SPEC_CONFIDENCE = {"high", "low"}
+OBSERVATIONAL_CONTEXT_MARKER = "FM_AGENT_OBSERVATIONAL_CONTEXT_V1"
+_ORACLE_MARKER = re.compile(
+    r"(?:\bBUG\s*:|\bFIXME\s*:|\bTODO\s*:|\bseeded[ -]bug\b|"
+    r"\bknown defect\b|\bintentionally (?:broken|defective)\b)",
+    re.IGNORECASE,
+)
+_DOCUMENT_EXTENSIONS = {".md", ".rst", ".txt", ".adoc"}
 PHASES = {
     "full": ["preflight", "project_understanding", "phase_cleanup", "extraction", "call_graph", "specification", "verification", "bug_validation", "finalize"],
     "incremental": ["validate_baseline", "refresh_plan", "preserve_specs", "diff", "rebuild_graph", "select_scope", "update_specs", "verify_affected", "bug_validation", "finalize"],
@@ -289,13 +301,16 @@ def is_metadata_sidecar(path: Path | str) -> bool:
     return str(path).replace("\\", "/").endswith(METADATA_SIDECAR_SUFFIXES)
 
 
-def _valid_evidence_item(item) -> bool:
+def _valid_evidence_item(item, kinds: set[str]) -> bool:
     return (
         isinstance(item, dict)
-        and set(item) == {"kind", "source", "claims"}
-        and item.get("kind") in EVIDENCE_KINDS
+        and set(item) == {"kind", "source", "quote", "claims"}
+        and item.get("kind") in kinds
         and isinstance(item.get("source"), str)
         and bool(item["source"].strip())
+        and isinstance(item.get("quote"), str)
+        and bool(item["quote"].strip())
+        and len(item["quote"]) <= 2000
         and isinstance(item.get("claims"), list)
         and item["claims"]
         and all(isinstance(claim, str) and claim.strip() for claim in item["claims"])
@@ -305,23 +320,166 @@ def _valid_evidence_item(item) -> bool:
 def _valid_spec(data) -> bool:
     if not isinstance(data, dict) or set(data) != SPEC_FIELDS:
         return False
+    if data.get("schema_version") != 2:
+        return False
     if not all(isinstance(data[field], str) for field in ("signature", "pre_condition", "post_condition")):
         return False
-    evidence = data.get("evidence")
-    if not isinstance(evidence, list) or not evidence or not all(_valid_evidence_item(item) for item in evidence):
+    normative = data.get("normative_evidence")
+    observations = data.get("observations")
+    if not isinstance(normative, list) or not all(_valid_evidence_item(item, NORMATIVE_EVIDENCE_KINDS) for item in normative):
+        return False
+    if not isinstance(observations, list) or not all(_valid_evidence_item(item, OBSERVATION_KINDS) for item in observations):
         return False
     confidence = data.get("confidence")
-    kinds = {item["kind"] for item in evidence}
     if confidence not in SPEC_CONFIDENCE:
         return False
     if confidence == "high":
-        return bool(kinds & EXTERNAL_EVIDENCE_KINDS) and "implementation-derived" not in kinds
-    return "implementation-derived" in kinds
+        return bool({item["kind"] for item in normative} & ROOT_NORMATIVE_EVIDENCE_KINDS)
+    return not normative and bool(observations)
+
+
+def _project_for_artifact(artifact: Path) -> Path | None:
+    artifact = artifact.resolve()
+    for parent in artifact.parents:
+        if parent.name == "extracted_functions" and parent.parent.name == "fm_agent":
+            return parent.parent.parent
+    return None
+
+
+def _relative_file(project: Path, value: str) -> Path | None:
+    candidate = Path(value)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    resolved = (project / candidate).resolve()
+    if resolved != project.resolve() and project.resolve() not in resolved.parents:
+        return None
+    return resolved if resolved.is_file() else None
+
+
+def _snapshot_file(project: Path, path: Path) -> bool:
+    """Require a repository file whose bytes still belong to the current HEAD."""
+    rel = path.relative_to(project).as_posix()
+    tracked = git(project, "ls-files", "--error-unmatch", "--", rel, check=False)
+    changed = git(project, "diff", "--name-only", "HEAD", "--", rel, check=False)
+    return tracked == rel and not changed
+
+
+def _quote_is_documentation(path: Path, text: str, quote: str) -> bool:
+    if path.suffix.lower() in _DOCUMENT_EXTENSIONS:
+        return quote in text
+    regions = re.findall(r"//[^\n]*|/\*.*?\*/|#[^\n]*|'''(?:.|\n)*?'''|\"\"\"(?:.|\n)*?\"\"\"", text, re.DOTALL)
+    return any(quote in region for region in regions)
+
+
+def _caller_contract_valid(project: Path, source: str, quote: str, visited: set[Path]) -> bool:
+    index = source_index(project) or {}
+    item = next((entry for entry in index.get("functions", []) if isinstance(entry, dict) and entry.get("id") == source), None)
+    rel = item.get("artifact") if isinstance(item, dict) else None
+    if not isinstance(rel, str):
+        return False
+    artifact = fm_dir(project) / "extracted_functions" / rel
+    spec = read_json(Path(f"{artifact}.spec.json"), None)
+    return bool(
+        _valid_spec(spec)
+        and spec.get("confidence") == "high"
+        and quote in {spec.get("pre_condition"), spec.get("post_condition")}
+        and _spec_evidence_ready(artifact, spec, visited)[0]
+    )
+
+
+def _knowledge_manifest_ready(project: Path) -> tuple[bool, str, list[dict]]:
+    root = fm_dir(project) / "spec_prompts" / "domain_context" / "user_knowledge"
+    manifest = read_json(root / "manifest.json", None)
+    record = active_record(project)
+    inputs = record.get("inputs") if isinstance(record, dict) else None
+    expected = inputs.get("knowledge") if isinstance(inputs, dict) else None
+    entries = manifest.get("entries") if isinstance(manifest, dict) and set(manifest) == {"schema_version", "snapshot_commit", "entries"} and manifest.get("schema_version") == 1 else None
+    if not isinstance(expected, list):
+        return False, "active analysis has no immutable knowledge input list", []
+    if not isinstance(entries, list) or manifest.get("snapshot_commit") != current_snapshot_commit(project) or len(entries) != len(expected):
+        return False, "missing or stale immutable user-knowledge manifest", []
+    for item, source in zip(entries, expected):
+        if not isinstance(item, dict) or set(item) != {"original_path", "copied_path", "sha256"} or not isinstance(source, dict):
+            return False, "invalid immutable user-knowledge manifest entry", []
+        original = source.get("path")
+        digest = source.get("sha256")
+        if not isinstance(original, str) or not isinstance(digest, str):
+            return False, "active analysis has an invalid knowledge input", []
+        try:
+            same_original = str(Path(item.get("original_path", "")).resolve()) == str(Path(original).resolve())
+        except (OSError, RuntimeError):
+            same_original = False
+        copied = _relative_file(project, item.get("copied_path", ""))
+        if not same_original or item.get("sha256") != digest or copied is None:
+            return False, "user-knowledge manifest does not match active analysis inputs", []
+        try:
+            inside_root = copied.parent == root or root in copied.parents
+        except (OSError, RuntimeError):
+            inside_root = False
+        if not inside_root or copied.name == "manifest.json" or file_hash(copied) != digest:
+            return False, "copied user knowledge does not match its manifest", []
+    return True, "", entries
+
+
+def _user_requirement_valid(project: Path, path: Path, quote: str) -> bool:
+    ready, _, entries = _knowledge_manifest_ready(project)
+    if not ready:
+        return False
+    rel = path.relative_to(project).as_posix()
+    entry = next((item for item in entries if isinstance(item, dict) and item.get("copied_path") == rel), None)
+    return bool(
+        entry
+        and isinstance(entry.get("sha256"), str)
+        and file_hash(path) == entry["sha256"]
+        and quote in path.read_text(encoding="utf-8", errors="replace")
+    )
+
+
+def _spec_evidence_ready(artifact: Path, spec: dict, visited: set[Path] | None = None) -> tuple[bool, str]:
+    project = _project_for_artifact(artifact)
+    if project is None:
+        return False, "specification artifact is outside fm_agent/extracted_functions"
+    artifact = artifact.resolve()
+    visited = set() if visited is None else set(visited)
+    if artifact in visited:
+        return False, "caller contract evidence contains a cycle"
+    visited.add(artifact)
+    contract_text = "\n".join((spec["pre_condition"], spec["post_condition"]))
+    for item in spec["normative_evidence"]:
+        combined = "\n".join([item["quote"], *item["claims"]])
+        if _ORACLE_MARKER.search(combined):
+            return False, "normative evidence contains benchmark/debug oracle markers"
+        if not all(claim in contract_text for claim in item["claims"]):
+            return False, "normative evidence claim is not represented verbatim in the contract"
+        if item["kind"] == "caller_contract":
+            if not _caller_contract_valid(project, item["source"], item["quote"], visited):
+                return False, "caller evidence does not name an existing high-confidence contract"
+            continue
+        path = _relative_file(project, item["source"])
+        if path is None:
+            return False, "normative evidence source is missing or outside the project snapshot"
+        rel = path.relative_to(project).as_posix()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if item["kind"] == "user_requirement":
+            if not rel.startswith("fm_agent/spec_prompts/domain_context/user_knowledge/") or not _user_requirement_valid(project, path, item["quote"]):
+                return False, "user requirement must quote copied user knowledge exactly"
+        elif rel.startswith(("fm_agent/", "fm_agent_skill/")) or is_test_source_path(rel) or not _snapshot_file(project, path) or not _quote_is_documentation(path, text, item["quote"]):
+            return False, "public API evidence must quote non-generated documentation or a source comment exactly"
+    for item in spec["observations"]:
+        path = _relative_file(project, item["source"])
+        if path is None or path.relative_to(project).as_posix().startswith(("fm_agent/", "fm_agent_skill/")) or not _snapshot_file(project, path):
+            return False, "implementation observation must quote a production source file"
+        if item["quote"] not in path.read_text(encoding="utf-8", errors="replace"):
+            return False, "implementation observation quote is not present in its source"
+    return True, ""
 
 
 def spec_confidence(artifact: Path) -> str | None:
     spec = read_json(Path(f"{artifact}.spec.json"), None)
-    return spec.get("confidence") if _valid_spec(spec) else None
+    if not _valid_spec(spec):
+        return None
+    ready, _ = _spec_evidence_ready(artifact, spec)
+    return spec.get("confidence") if ready else None
 
 
 def _valid_info(data) -> bool:
@@ -344,6 +502,9 @@ def sidecars_ready(artifact: Path) -> tuple[bool, str]:
     spec, info = read_json(spec_path, None), read_json(info_path, None)
     if not _valid_spec(spec):
         return False, f"missing or invalid spec sidecar: {spec_path.name}"
+    evidence_ok, evidence_reason = _spec_evidence_ready(artifact, spec)
+    if not evidence_ok:
+        return False, f"invalid specification evidence: {evidence_reason}"
     if not _valid_info(info):
         return False, f"missing or invalid info sidecar: {info_path.name}"
     return True, ""
@@ -607,15 +768,31 @@ def specification_context_ready(project: Path) -> tuple[bool, str]:
     root = fm_dir(project) / "spec_prompts"
     if not isinstance(phases, list) or not phases:
         return False, "missing phases for specification context"
-    if not (root / "system_prompt.md").is_file():
+    system_prompt = root / "system_prompt.md"
+    if not system_prompt.is_file():
         return False, "missing specification system prompt"
+    if _ORACLE_MARKER.search(system_prompt.read_text(encoding="utf-8", errors="replace")):
+        return False, "specification system prompt contains benchmark/debug oracle markers"
     domain = root / "domain_context"
-    if not (domain / "engine_overview.txt").is_file():
+    overview = domain / "engine_overview.txt"
+    if not overview.is_file():
         return False, "missing engine overview"
+    knowledge_ready, knowledge_reason, _ = _knowledge_manifest_ready(project)
+    if not knowledge_ready:
+        return False, knowledge_reason
+    context_files = [overview]
     for index, phase in enumerate(phases, start=1):
         number = _phase_number(phase, index)
-        if not (domain / f"phase_{number:02d}_types.txt").is_file():
+        phase_context = domain / f"phase_{number:02d}_types.txt"
+        if not phase_context.is_file():
             return False, f"missing phase type context for phase {number}"
+        context_files.append(phase_context)
+    for path in context_files:
+        content = path.read_text(encoding="utf-8", errors="replace")
+        if not content.startswith(OBSERVATIONAL_CONTEXT_MARKER + "\n"):
+            return False, f"generated domain context lacks its observational marker: {path.name}"
+        if _ORACLE_MARKER.search(content):
+            return False, f"generated domain context contains benchmark/debug oracle markers: {path.name}"
     return True, ""
 
 

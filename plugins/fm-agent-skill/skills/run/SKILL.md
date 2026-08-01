@@ -229,10 +229,23 @@ outputs, and required reference files. A worker must return its concise JSON
 receipt; workers cannot spawn other workers. The Coordinator is the only
 writer of `fm_agent_skill/jobs/`, phase receipts, and all other control state.
 
+Immediately after starting the full `specification` phase, or the incremental
+`update_specs` phase before any domain/spec Worker, materialize the immutable
+knowledge inputs deterministically:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/knowledge.py" materialize --project "$PROJECT"
+```
+
+If this rejects a changed or missing knowledge file, fail the phase. Workers
+may cite user requirements only through the resulting manifest-bound copies.
+
 For each specification job, provide only the assigned extracted artifacts and
-permitted header, domain, and caller evidence. Do not read test files. Require
-the worker to emit evidence and confidence in every spec sidecar; never
-schedule a `MATCH` from a low-confidence or implementation-derived contract.
+permitted user-requirement, public-API, and caller-contract evidence. Generated
+domain context is observation-only. Do not read test files. Require
+the worker to emit normative evidence, observations, and confidence in every
+spec sidecar; never schedule a `MATCH` from a low-confidence,
+observation-only contract.
 
 For incremental planning, give `fm-incremental-spec-plan-worker` exactly one
 assigned output: `fm_agent_skill/worker_reports/<job-id>.json`. It writes the
@@ -371,3 +384,12 @@ function copies; write specifications only to their `.spec.json` and
 `.info.json` sidecars. Do not expose raw full diffs in chat. Execute and describe only
 capabilities documented by this Skill's shared instructions and references; do not
 infer features from the original FM-Agent project.
+
+Build the final user report only from validated current-run artifacts. A
+function may appear under confirmed bugs only when its direct `MISMATCH` has a
+`bug_validation/*.result.json` whose status is `confirmed` and whose latest
+attempt names matching dynamic evidence. Never relabel specification text,
+implementation observations, source comments, benchmark manifests, or host
+suspicions as discovered bugs. If there are no direct `MISMATCH` results,
+report zero candidates and zero confirmed bugs; external benchmark ground
+truth belongs in a separate evaluator section.

@@ -23,6 +23,10 @@ no-op detection, and explicit safe resume of interrupted analyses.
   (`MISMATCH`) from propagated dependency risks (`DEPENDENCY_RISK`).
 - Build controlled isolated reproductions for eligible direct violations and
   report a confirmed defect only after actual dynamic evidence.
+- Keep schema-v2 normative evidence separate from implementation observations.
+  High-confidence contracts require exact copied user/public documentation;
+  generated context, implementation literals, caller-only cycles, and
+  benchmark/debug oracle markers cannot prove `MATCH`.
 - Run a full analysis when no usable baseline exists.
 - Run an incremental analysis automatically when the current Git snapshot
   differs from a valid baseline commit.
