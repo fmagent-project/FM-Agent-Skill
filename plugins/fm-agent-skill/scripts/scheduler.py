@@ -227,19 +227,31 @@ def phase_receipt(target, phase):
     totals = {status: sum(1 for job in jobs if job.get("status") == status) for status in ("queued", "running", "retryable", "failed", "succeeded")}
     escalations = []
     outcomes = {verdict: 0 for verdict in sorted(state.VERDICTS)}
-    deterministic_shortcuts = 0
     for job in jobs:
         result = job.get("result", {}) if isinstance(job.get("result"), dict) else {}
         verdict = result.get("verdict")
         if verdict in outcomes: outcomes[verdict] += 1
-        shortcut = result.get("counts", {}).get("deterministic_shortcut") == 1 if isinstance(result.get("counts"), dict) else False
-        if shortcut: deterministic_shortcuts += 1
         reason = None
         if job.get("status") in {"failed", "retryable"}: reason = job.get("failure_class", job.get("status"))
-        elif verdict in {"MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"} and not shortcut: reason = verdict
+        elif verdict in {"MISMATCH", "DEPENDENCY_RISK", "INCONCLUSIVE", "ERROR"}: reason = verdict
         elif result.get("escalation") not in {None, "", "none", "NONE", False}: reason = "worker_escalation"
         if reason: escalations.append({"job_id": job.get("id"), "type": job.get("type"), "reason": reason})
-    receipt = {"schema_version": 1, "phase": phase, "generated_at": state.now(), "totals": totals, "outcomes": outcomes, "deterministic_shortcuts": deterministic_shortcuts, "gate_ready": totals["queued"] == totals["running"] == totals["retryable"] == totals["failed"] == 0, "escalations": escalations}
+    receipt = {"schema_version": 1, "phase": phase, "generated_at": state.now(), "totals": totals, "outcomes": outcomes, "gate_ready": totals["queued"] == totals["running"] == totals["retryable"] == totals["failed"] == 0, "escalations": escalations}
+    if phase in {"verification", "verify_affected"}:
+        plan = state.read_json(state.control_dir(target) / "job_plans" / f"{phase}.json", {})
+        artifacts = {
+            entry.get("artifact") for entry in plan.get("entries", [])
+            if isinstance(entry, dict) and isinstance(entry.get("artifact"), str)
+        }
+        functions = [
+            item for item in (state.source_index(target) or {}).get("functions", [])
+            if isinstance(item, dict) and item.get("artifact") in artifacts
+        ]
+        receipt["semantic_coverage"] = state.verification_coverage(target, functions)
+        semantic_ready, semantic_reason = state.verification_coverage_ready(target, functions) if functions else (True, "")
+        receipt["semantic_gate_ready"] = semantic_ready
+        receipt["semantic_gate_reason"] = semantic_reason
+        receipt["gate_ready"] = receipt["gate_ready"] and semantic_ready
     path = state.control_dir(target) / "phase_receipts" / f"{phase}.json"; state.atomic_json(path, receipt)
     return {"receipt_path": path.relative_to(target).as_posix(), **receipt}
 def transition(target, job_id, action, result, message, failure_class):

@@ -60,7 +60,8 @@ required toolchain, SDK, device, or public entry point is unavailable, write
 probe must be self-contained, make no network call, avoid arbitrary file I/O,
 call only through the public entry point, catch runtime errors, and print
 exactly one first-line marker:
-`CONFIRMED` when actual behavior differs from the externally evidenced contract,
+`CONFIRMED` when actual behavior differs from the validated normative or
+inferred contract,
 or `NOT CONFIRMED` when it does not. Do not run it yourself and do not put a
 shell command in the contract.
 

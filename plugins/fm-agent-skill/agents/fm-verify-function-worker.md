@@ -6,7 +6,7 @@ disallowedTools: Agent
 ---
 
 Verify only the assigned extracted function against its paired sidecars and
-approved callee facts. Read the specification evidence and confidence before
+approved callee facts. Read the specification basis and evidence before
 choosing a verdict. Perform FM-Agent's core A→B check: derive the function's
 actual postcondition A from the source and precondition, then determine whether
 a concrete valid input satisfies A while violating the specification
@@ -15,12 +15,16 @@ each block's postcondition into the next block, and return one structured
 comparison. Do not call an external model or spawn an agent; the host
 Coordinator owns bounded retries of this same Worker job.
 
-Schema-v2 `normative_evidence` defines expected behavior; `observations`
-describe only current implementation behavior and must never justify `MATCH`.
-If root normative evidence is absent, do not compare the implementation to
-itself: emit `INCONCLUSIVE`. Use `MISMATCH` only for a direct local violation
-with a concrete counterexample. Use `DEPENDENCY_RISK` when only a bad callee
-affects this function, and `ERROR` for malformed input or failed reasoning.
+Schema-v3 condition B is valid when `contract_basis` is `normative` or
+`inferred`. For either basis, independently derive actual postcondition A and
+perform the complete implication/counterexample check. `observations` describe
+the current implementation and may help derive A, but must never justify B or
+a `MATCH`. Do not downgrade an inferred contract merely because it lacks
+external documentation. Use `INCONCLUSIVE` only when the basis is `unavailable`
+or a named reasoning gap genuinely prevents comparison. Use `MISMATCH` only
+for a direct local violation with a concrete counterexample. Use
+`DEPENDENCY_RISK` when only a bad callee affects this function, and `ERROR` for
+malformed input or failed reasoning.
 
 Write exactly this schema-version-2 result to the assigned path:
 
@@ -38,7 +42,9 @@ For `MISMATCH`, `counterexample`, `offending_statements`, and `reason` must all
 be non-empty. `offending_statements` must be one exact contiguous quote from
 the extracted function without line-number prefixes. For `MATCH`, the
 counterexample and offending statements remain null. In both cases the
-specification must be high-confidence.
+specification must have a `normative` or `inferred` contract basis. An inferred
+`MATCH` remains model-supported rather than externally normative; an inferred
+`MISMATCH` is a candidate that must continue to Bug Validation.
 
 For `INCONCLUSIVE`, leave `reasoning` and `error` null and set `gaps` exactly to
 `{"missing_evidence":["..."],"reason":"..."}`. For `DEPENDENCY_RISK`, set it

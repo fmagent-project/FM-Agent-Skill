@@ -20,8 +20,9 @@ previously listed as ready.
 For `specification`, `verification`, and `verify_affected`, the Coordinator
 must use `semantic_executor.py prepare/dispatch/submit` instead of calling those
 scheduler transitions directly. The executor removes unassigned result files,
-short-circuits low-confidence verification to a validated `INCONCLUSIVE`, and
-issues an exact dispatch ticket before acquiring each lease. Never use a
+then issues an exact dispatch ticket before acquiring each lease. It never
+derives a semantic verdict or skips an `unavailable` contract; every pending
+verification job reaches the original FM-Agent-style reasoner. Never use a
 generated JavaScript/Dynamic Workflow for these jobs, ask an Agent to parse the
 plan, or reproduce a Worker prompt in workflow source.
 
@@ -40,14 +41,16 @@ Validator. Workers never write
 job manifests, phase receipts, locks, or other control state.
 
 Retain the same job id for retries. `execution`, `output`, and `interrupted`
-failures use `scheduler.py fail`; if retryable, call `scheduler.py retry` after
-10 seconds, up to configured `retries`. For a specification layer, retry
+failures use `scheduler.py fail`; if retryable, call `scheduler.py retry` under
+the configured retry policy. For a specification layer, retry
 remaining batches immediately when any paired sidecar became valid; otherwise
 wait 10 seconds. Feed the scheduler's exact validation `message` back to the
 same Worker and repair only its assigned invalid sidecars. Unknown or missing
 closed-schema fields are an `output` failure; they are not a reason to abandon
-other batches or bypass the phase. `input`, `semantic`, and `cancelled` are terminal. A semantic
-verification error is a valid `ERROR` result, not a retry. A Bug Validator job
+other batches or bypass the phase. `input`, `semantic`, and `cancelled` are
+terminal. A semantic verification error is recorded as `ERROR`, but the
+Verification gate cannot create an official baseline while any ERROR remains.
+A Bug Validator job
 has worker preparation, execution, and finalization passes in the default
 `agent-executed` mode; the optional `adapter` mode retains Coordinator-owned
 dynamic execution. Runtime failures retry up to five
@@ -66,10 +69,6 @@ small aggregate record at `fm_agent_skill/control/phase_receipts/<phase>.json`.
 The Coordinator reads that receipt, then reads detailed artifacts only for an
 escalation (`MISMATCH`, `DEPENDENCY_RISK`, `INCONCLUSIVE`, `ERROR`, or worker
 failure) before its normal gate.
-Deterministic low-confidence shortcuts contribute to the receipt's
-`INCONCLUSIVE` outcome count and `deterministic_shortcuts`, but are not expanded
-into per-job escalations because their evidence gap is identical and no Worker
-ran.
 
 ## Worker mapping
 
@@ -80,7 +79,7 @@ ran.
 | domain context generation | `fm-domain-context-worker` | after valid phases |
 | static edge resolution without CodeGraph | `fm-agent-static-edge-worker` | one bounded candidate, then deterministic validation |
 | specification batch generation | `fm-spec-batch-worker` | same layer batches in parallel |
-| function Hoare reasoner | `fm-verify-function-worker` | one high-confidence ready function per job; low-confidence contracts are deterministically inconclusive |
+| function Hoare reasoner | `fm-verify-function-worker` | one ready function per job; normative and inferred contracts receive A→B, unavailable contracts receive an explicit Worker judgment |
 | Bug Validator | `fm-bug-validate-worker` | one direct `MISMATCH` per job |
 | incremental module selection | `fm-select-relevant-modules-worker` | one job |
 | incremental file selection | `fm-select-relevant-files-worker` | after module selection |

@@ -29,9 +29,13 @@ def phase_receipt_ready(target, phase):
     jobs = [state.read_json(path, {}) for path in jobs_dir.glob("*.json")] if jobs_dir.is_dir() else []
     current = [job for job in jobs if isinstance(job, dict) and job.get("phase") == phase and not job.get("legacy_contract")]
     if not current:
-        return True
+        return True, ""
     receipt = state.read_json(state.control_dir(target) / "phase_receipts" / f"{phase}.json", {})
-    return isinstance(receipt, dict) and receipt.get("phase") == phase and receipt.get("gate_ready") is True
+    if not isinstance(receipt, dict) or receipt.get("phase") != phase:
+        return False, f"scheduler phase receipt is missing or stale: {phase}"
+    if receipt.get("gate_ready") is not True:
+        return False, receipt.get("semantic_gate_reason") or f"scheduler phase receipt is not ready: {phase}"
+    return True, ""
 
 
 def main():
@@ -75,12 +79,16 @@ def main():
             record["current_phase"] = phase; record["phase_status"][phase] = {"status": "running", "started_at": state.now(), "attempt": attempt}
         elif args.action == "phase-complete":
             if phase not in record["phases"]: raise SystemExit("unknown phase")
-            if not phase_receipt_ready(target, phase): raise SystemExit(f"scheduler phase receipt is missing or not ready: {phase}")
+            receipt_ready, receipt_reason = phase_receipt_ready(target, phase)
+            if not receipt_ready: raise SystemExit(receipt_reason)
             gate = validate(target, record["mode"], phase, record.get("inputs", {}).get("submodules", []))
             if not gate["ok"]: raise SystemExit(gate["reason"])
             record["phase_status"][phase] = {"status": "succeeded", "ended_at": state.now()}; index = record["phases"].index(phase)
             record["current_phase"] = record["phases"][index + 1] if index + 1 < len(record["phases"]) else phase
-        elif args.action == "phase-fail": record["phase_status"][phase] = {"status": "failed", "ended_at": state.now(), "message": args.message}; record.update({"status": "failed", "ended_at": state.now(), "failure": args.message})
+        elif args.action == "phase-fail":
+            failure_class = "insufficient_specification" if args.message.startswith("insufficient_specification:") else "verification_incomplete" if args.message.startswith("verification_incomplete:") else "phase_failure"
+            record["phase_status"][phase] = {"status": "failed", "ended_at": state.now(), "message": args.message, "classification": failure_class}
+            record.update({"status": "failed", "ended_at": state.now(), "failure": args.message, "failure_classification": failure_class})
         elif args.action == "complete":
             missing = [item for item in record["phases"] if record["phase_status"].get(item, {}).get("status") != "succeeded"]
             if missing: raise SystemExit("cannot complete: phase gates not passed: " + ", ".join(missing))
@@ -89,7 +97,9 @@ def main():
             if record.get("snapshot_commit") != commit: raise SystemExit("analysis worktree moved away from its saved snapshot commit")
             state.atomic_json(state.skill_dir(target) / "baseline.json", {"schema_version": 4, "baseline_commit": commit, "fingerprint": record["fingerprint"], "inputs": record["inputs"], "completed_at": record["ended_at"]})
             state.version_log(target, commit)
-        elif args.action == "fail": record.update({"status": "failed", "ended_at": state.now(), "failure": args.message})
+        elif args.action == "fail":
+            failure_class = "insufficient_specification" if args.message.startswith("insufficient_specification:") else "verification_incomplete" if args.message.startswith("verification_incomplete:") else record.get("failure_classification", "pipeline_failure")
+            record.update({"status": "failed", "ended_at": state.now(), "failure": args.message, "failure_classification": failure_class})
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})
     record["updated_at"] = state.now(); save(target, record)
     if args.action in {"phase-fail", "fail"}: publish_failure(target, record)

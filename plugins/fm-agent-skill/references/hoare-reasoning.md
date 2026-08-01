@@ -16,13 +16,15 @@ counterexample, one exact contiguous source quote, A, B, and the reason.
 Malformed spec, model/tool failure, or unparseable output is `ERROR`, not
 `MATCH` or `MISMATCH`; proceed with other functions.
 
-Before proving a result, inspect the sidecar's `confidence`,
-`normative_evidence`, and `observations`. `MATCH` requires a high-confidence
-contract grounded in exact copied user requirements or non-generated public
-API documentation. A low-confidence implementation observation may guide investigation but cannot prove a
-match; emit `INCONCLUSIVE` and name the missing external evidence. Do not turn
-an implementation constant, comparison, or formula into proof obligation
-without that support.
+Before proving a result, inspect `contract_basis`, normative and inference
+evidence, and implementation observations. A `normative` or `inferred` sidecar
+provides condition B and must receive the same FM-Agent A→B reasoning. An
+inferred contract is supported by interface/caller/paired-API/type consistency
+rather than external prose; do not downgrade it solely for lacking documents.
+An `unavailable` contract produces `INCONCLUSIVE` only after the Worker names
+the actual missing semantic signal. Implementation observations may derive A
+but cannot prove B or MATCH. Never turn an observed constant, comparison,
+formula, field, or branch into its own proof obligation.
 
 The assigned Codex/Claude Worker is the reasoner; no local script calls a model
 API. It writes one structured postcondition/spec result. On invalid output the
@@ -32,7 +34,7 @@ JSON object matching
 [artifact-contract.md](artifact-contract.md): `MATCH` for a proved check,
 `MISMATCH` for a reasoned local violation, `DEPENDENCY_RISK` when only a
 callee's direct mismatch affects the caller's outcome, `INCONCLUSIVE` for an
-insufficiently evidenced contract, and `ERROR` for failure to reason. Do not
+unavailable or genuinely unresolvable contract, and `ERROR` for failure to reason. Do not
 manufacture a caller `MISMATCH` solely from a callee result.
 
 For an input parser/converter, reject a `MATCH` when its specification excludes

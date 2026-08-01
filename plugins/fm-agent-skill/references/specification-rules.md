@@ -6,24 +6,36 @@ postconditions, errors, data/format/range invariants, and cross-path
 invariants. A defect is a gap between that contract and implementation; do not
 weaken the contract to document a bug.
 
-## Evidence and confidence rule
+## Contract basis and evidence rule
 
-Treat implementation literals, comparison operators, branch thresholds, and
-formulas as observations, not contract facts. Promote one of them into a
-precondition or postcondition only when copied user knowledge or a
-non-generated public API contract supports that rule. Record every contract
-claim in schema-v2 `normative_evidence` with an exact source quote. Generated
-engine/phase context is explicitly observational and cannot be cited as a
-requirement; caller evidence alone cannot form a high-confidence cycle.
+Preserve FM-Agent's core separation: Specification derives intended condition
+B; Verification independently derives actual condition A from the body. Do not
+write B as a narration of A.
 
-When no such external support exists, record the current code fact under
-`observations` with kind `implementation`, leave `normative_evidence` empty,
-and use `confidence: "low"`. It is a lead for review,
-not a proved behavioral requirement. A low-confidence sidecar must never yield
-`MATCH` or `MISMATCH`: verification returns `INCONCLUSIVE` because there is no
-externally grounded B against which actual postcondition A can be proved or
-refuted. Do not infer that a constant, comparison, or formula is intended
-merely because the current implementation uses it.
+Use schema-v3 `contract_basis`:
+
+- `normative` / `high`: copied user knowledge or a non-generated public API
+  contract provides at least one root claim. Record exact quotes in
+  `normative_evidence`. Caller contracts may supplement but cannot form a
+  circular root.
+- `inferred` / `medium`: no root document states the behavior, so infer the
+  governing contract from independent semantic signals, as original FM-Agent
+  does. Use public names/signatures, caller expectations, paired APIs,
+  cross-function consistency, and declared type invariants. Record exact source
+  quotes and the derived claims in `inference_evidence`. This is a real,
+  falsifiable B and proceeds to A→B Verification; a resulting MISMATCH requires
+  dynamic Bug Validation before confirmation.
+- `unavailable` / `low`: use only after no falsifiable B can be formed from the
+  available domain, interface, graph, and type context. Verification still
+  runs and records the concrete reasoning gap; the executor never manufactures
+  an INCONCLUSIVE result from confidence alone.
+
+Treat implementation literals, comparison operators, branch thresholds,
+formulas, field selections, and control flow as observations, not contract
+facts. Record them only under `observations`. They may derive A but cannot
+justify B or MATCH. Generated engine/phase context may guide inference but is
+not itself a quotable source. Lack of external documentation alone never
+forces `unavailable`.
 
 Do not read tests when extracting, planning phases, generating specifications,
 or verifying functions. This matches FM-Agent's source-analysis scope: tests
@@ -60,7 +72,7 @@ bad input that a caller can actually pass?" If yes, remove or weaken the
 precondition and specify the failure behavior instead.
 
 Failure behavior belongs inside `post_condition`; it is not a separate sidecar
-field. The seven-key spec schema is closed. Never emit `error_behavior`,
+field. The nine-key spec schema is closed. Never emit `error_behavior`,
 `throws`, `exceptions`, `notes`, or another top-level key. A sidecar containing
 one must be repaired by the same specification job before its receipt can pass.
 
@@ -72,7 +84,7 @@ source. Store its contract in paired sidecars instead:
 <unchanged extracted source>
 
 // fm_agent/extracted_functions/.../parse.cpp.spec.json
-{"schema_version":2,"signature":"parse(std::string_view)","pre_condition":"input is complete","post_condition":"rejects trailing input","normative_evidence":[{"kind":"public_api_contract","source":"include/parse.hpp","quote":"Rejects trailing input.","claims":["rejects trailing input"]}],"observations":[{"kind":"implementation","source":"src/parse.cpp","quote":"return parse_prefix(input);","claims":["implementation returns a parsed prefix"]}],"confidence":"high"}
+{"schema_version":3,"signature":"parse(std::string_view)","pre_condition":"input is complete","post_condition":"rejects trailing input","contract_basis":"normative","normative_evidence":[{"kind":"public_api_contract","source":"include/parse.hpp","quote":"Rejects trailing input.","claims":["rejects trailing input"]}],"inference_evidence":[],"observations":[{"kind":"implementation","source":"src/parse.cpp","quote":"return parse_prefix(input);","claims":["implementation returns a parsed prefix"]}],"confidence":"high"}
 
 // fm_agent/extracted_functions/.../parse.cpp.info.json
 {"callees":[{"name":"...","signature":"...","pre_condition":"...","post_condition":"..."}]}

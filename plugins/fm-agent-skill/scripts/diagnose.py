@@ -13,6 +13,9 @@ snapshot_available = isinstance(snapshot_value, str) and Path(snapshot_value).is
 target = Path(snapshot_value).resolve() if snapshot_available else source
 summary = state.read_json(state.fm_dir(target) / "bug_validation" / "summary.json", {})
 run = state.read_json(state.skill_dir(target) / "active.json", {})
+verification = state.read_json(state.control_dir(target) / "phase_receipts" / "verification.json", {})
+if not verification:
+    verification = state.read_json(state.control_dir(target) / "phase_receipts" / "verify_affected.json", {})
 resumable = state.inspect_resume(target)
 failure = state.read_json(state.skill_dir(source) / "failure.json", {})
 status = run.get("status") if isinstance(run, dict) else None
@@ -20,6 +23,7 @@ official = status in {"succeeded", "noop"} and not failure
 result = {
     "run": run,
     "summary": summary,
+    "verification": verification,
     "result_authority": {
         "official_result_available": official,
         "status": "official" if official else "in_progress" if status == "running" else "incomplete",

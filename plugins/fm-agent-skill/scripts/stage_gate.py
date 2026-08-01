@@ -78,7 +78,11 @@ def validate(target, mode, phase, submodules):
         "extraction": lambda: bool(state.scoped_functions(target, submodules)),
         "call_graph": lambda: call_graph_ready(target),
         "specification": lambda: all_ready(state.semantic_job_plan_ready(target, "specification", scoped), state.specification_context_ready(target), state.specification_artifacts_ready(target, scoped, submodules)),
-        "verification": lambda: all_ready(state.semantic_job_plan_ready(target, "verification", scoped), state.function_artifacts_ready(target, scoped, submodules)),
+        "verification": lambda: all_ready(
+            state.semantic_job_plan_ready(target, "verification", scoped),
+            state.function_artifacts_ready(target, scoped, submodules),
+            state.verification_coverage_ready(target, scoped),
+        ),
         "bug_validation": lambda: bug_validation_current(target, mode),
         "finalize": lambda: True,
         "validate_baseline": lambda: baseline_ready(target, submodules),
@@ -88,7 +92,12 @@ def validate(target, mode, phase, submodules):
         "rebuild_graph": lambda: call_graph_ready(target),
         "select_scope": lambda: selection_ready(target),
         "update_specs": lambda: all_ready(state.specification_context_ready(target), state.specification_artifacts_ready(target, scoped, submodules), ((fm / "incremental_updated_specs.json").is_file(), "missing incremental specification update record")),
-        "verify_affected": lambda: all_ready((selection_ready(target), "missing incremental selection"), state.semantic_job_plan_ready(target, "verify_affected", selected), state.selected_verification_ready(target, selected)),
+        "verify_affected": lambda: all_ready(
+            (selection_ready(target), "missing incremental selection"),
+            state.semantic_job_plan_ready(target, "verify_affected", selected),
+            state.selected_verification_ready(target, selected),
+            state.verification_coverage_ready(target, selected) if selected else (True, ""),
+        ),
     }
     check = checks.get(phase)
     if check is None: return {"ok": False, "reason": f"unknown {mode} phase: {phase}"}
@@ -102,7 +111,12 @@ def validate(target, mode, phase, submodules):
             ok, reason = False, "snapshot production source changed during analysis"
     except OSError as exc:
         ok, reason = False, str(exc)
-    return {"ok": ok, "phase": phase, "reason": "" if ok else (reason or f"required artifacts for {phase} are missing or invalid")}
+    failure_reason = "" if ok else (reason or f"required artifacts for {phase} are missing or invalid")
+    classification = "ready" if ok else "insufficient_specification" if failure_reason.startswith("insufficient_specification:") else "invalid"
+    result = {"ok": ok, "phase": phase, "reason": failure_reason, "classification": classification}
+    if phase in {"verification", "verify_affected"}:
+        result["coverage"] = state.verification_coverage(target, scoped if phase == "verification" else selected)
+    return result
 
 
 def main():

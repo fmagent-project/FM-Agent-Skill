@@ -1,7 +1,7 @@
 # Bug validation
 
 A schema-v2 direct reasoning `MISMATCH` is a candidate only after the gate has
-validated high-confidence specification B, reasoned actual postcondition A, a
+validated normative or inferred specification B, reasoned actual postcondition A, a
 concrete `A ∧ ¬B` counterexample, and an exact offending source quote. It is
 never a confirmed defect. Do not
 read project tests or run the full test suite. Instead, reproduce the candidate
@@ -12,7 +12,7 @@ probe. `DEPENDENCY_RISK` is not a bug candidate.
 
 Structured code/spec reasoning creates the candidate. A build or syntax probe only checks
 that a snapshot is buildable; it is not behavioral evidence. Only an executed
-minimal probe whose actual output differs from the externally evidenced contract
+minimal probe whose actual output differs from the validated normative or inferred contract
 may produce `confirmed`.
 
 Before the first candidate, run `probe_runner.py detect`; its profile at

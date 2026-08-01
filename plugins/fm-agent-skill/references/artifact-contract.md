@@ -31,8 +31,9 @@ All mutable Skill state lives under `fm_agent_skill/`.
   or merge phases unless `one_phase` is enabled.
 - `fm_agent/logic_verification_results/` has one result per extracted function.
   A verdict is `MATCH`, direct `MISMATCH`, `DEPENDENCY_RISK`, `INCONCLUSIVE`,
-  or `ERROR`. `MATCH` is valid only for a high-confidence specification with
-  external evidence.
+  or `ERROR`. `MATCH` and `MISMATCH` require an independent `normative` or
+  `inferred` specification contract; implementation observations cannot define
+  expected behavior.
   Dependency risk records affected callers but is not a direct bug candidate.
 - `fm_agent/bug_validation/` is generated only when a direct `MISMATCH` is
   dynamically probed. Every current candidate has a detail Markdown file,
@@ -70,19 +71,21 @@ All mutable Skill state lives under `fm_agent_skill/`.
 `<function>.<ext>.spec.json` is exactly:
 
 ```json
-{"schema_version":2,"signature":"...","pre_condition":"...","post_condition":"...","normative_evidence":[{"kind":"user_requirement|public_api_contract|caller_contract","source":"repository-relative path or caller function id","quote":"exact source text","claims":["verbatim contract clause"]}],"observations":[{"kind":"implementation","source":"repository-relative production source","quote":"exact implementation text","claims":["observed behavior"]}],"confidence":"high|low"}
+{"schema_version":3,"signature":"...","pre_condition":"...","post_condition":"...","contract_basis":"normative|inferred|unavailable","normative_evidence":[{"kind":"user_requirement|public_api_contract|caller_contract","source":"repository-relative path or caller function id","quote":"exact source text","claims":["contract clause"]}],"inference_evidence":[{"kind":"interface_name|caller_expectation|paired_api|cross_function_consistency|type_invariant","source":"repository-relative production source","quote":"exact semantic signal","claims":["inferred contract clause"]}],"observations":[{"kind":"implementation","source":"repository-relative production source","quote":"exact implementation text","claims":["observed behavior"]}],"confidence":"high|medium|low"}
 ```
 
-`high` requires at least one exact `user_requirement` or
+`normative/high` requires at least one exact `user_requirement` or
 `public_api_contract`; generated domain context and caller-only cycles are not
-authority. `low` has no normative evidence and at least one implementation
-observation. A normative claim must appear verbatim in the pre/postcondition.
+authority. `inferred/medium` requires at least one exact interface, caller,
+paired-API, cross-function, or type signal and no root normative evidence.
+`unavailable/low` has no contract evidence and at least one implementation
+observation. Every evidence claim must appear verbatim in the pre/postcondition.
 User requirements quote the copied files under
 `domain_context/user_knowledge/`; public API contracts quote non-generated
 documentation or source comments. Oracle markers such as `BUG:`, `FIXME:`,
 `TODO:`, seeded bugs, and known defects are rejected as normative evidence.
 
-The seven-key object is a closed schema: extra keys are invalid. Encode
+The nine-key object is a closed schema: extra keys are invalid. Encode
 observable error, exception, rejection, and sentinel behavior inside
 `post_condition`; do not add an `error_behavior` field.
 
@@ -105,9 +108,10 @@ Verification result is exactly
 `schema_version: 2`. `MATCH` and `MISMATCH` require `reasoning` exactly equal to
 `{actual_postcondition,spec_postcondition,counterexample,offending_statements,reason}`.
 The specification postcondition must equal the sidecar text. `MISMATCH` also
-requires a high-confidence specification, non-empty concrete counterexample,
+requires a normative or inferred contract, non-empty concrete counterexample,
 reason, and an exact contiguous source quote in `offending_statements`;
-`MATCH` requires high confidence and null counterexample/offending statements.
+`MATCH` requires the same independent contract basis and null
+counterexample/offending statements.
 `MISMATCH` means a local implementation/spec violation;
 `DEPENDENCY_RISK` means a caller is affected by a callee mismatch but has no
 independently established local violation and uses
@@ -159,6 +163,8 @@ Detailed incremental plans are written only to their assigned
 `fm_agent_skill/worker_reports/<job-id>.json`, not returned inline.
 
 `fm_agent_skill/control/phase_receipts/<phase>.json` is Coordinator-generated
-and contains only phase totals, gate readiness, and escalation job IDs. It is
-the normal worker fan-in surface; inspect detailed outputs only for its listed
-escalations.
+and contains phase totals, gate readiness, and escalation job IDs. Verification
+receipts additionally include `semantic_coverage` with contract-basis and
+verdict counts plus a semantic gate reason. An all-INCONCLUSIVE receipt has
+`gate_ready: false`. This is the normal Worker fan-in surface; inspect detailed
+outputs only for its listed escalations.

@@ -74,6 +74,7 @@ def publish_failure(target: Path, record: dict) -> dict:
         "snapshot_commit": record.get("snapshot_commit"),
         "last_completed_phase": completed[-1] if completed else None,
         "failed_phase": record.get("current_phase"),
+        "classification": record.get("failure_classification", "pipeline_failure"),
         "reason": record.get("failure") or record.get("phase_status", {}).get(record.get("current_phase"), {}).get("message") or "analysis failed",
         "updated_at": state.now(),
     }

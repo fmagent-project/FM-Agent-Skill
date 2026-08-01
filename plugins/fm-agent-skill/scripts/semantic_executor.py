@@ -4,7 +4,9 @@
 This script never invokes Claude, Codex, or another model.  It owns the fragile
 parts of semantic dispatch that must not be reconstructed in an ad-hoc host
 Workflow: scheduler leases, exact worker identity, assigned paths, deterministic
-low-confidence verification, receipt validation, and retry state.
+dispatch, receipt validation, and retry state. Every verification job is sent
+to FM-Agent's semantic Worker; this bridge never substitutes a confidence-based
+verdict for the A-to-B reasoner.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ WORKERS = {
     "spec_batch": "fm-spec-batch-worker",
     "verify_function": "fm-verify-function-worker",
 }
+PUBLIC_INTERFACE_SUFFIXES = {".h", ".hh", ".hpp", ".hxx", ".inc", ".inl"}
 
 
 def _active(target: Path, phase: str) -> dict:
@@ -70,88 +73,14 @@ def _remove_unassigned_verification_results(target: Path, phase: str) -> list[st
     return removed
 
 
-def _function(target: Path, artifact: str) -> dict:
-    index = state.source_index(target) or {}
-    item = next(
-        (entry for entry in index.get("functions", []) if isinstance(entry, dict) and entry.get("artifact") == artifact),
-        None,
-    )
-    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
-        raise ValueError(f"verification artifact is absent from the current analysis index: {artifact}")
-    return item
-
-
-def _low_confidence_result(target: Path, job: dict) -> bool:
-    if job.get("type") != "verify_function" or job.get("status") != "queued":
-        return False
-    artifacts = job.get("artifacts", [])
-    if len(artifacts) != 1:
-        raise ValueError(f"Verification job {job.get('id')} does not own exactly one artifact")
-    rel = artifacts[0]
-    artifact = state.fm_dir(target) / "extracted_functions" / rel
-    if state.spec_confidence(artifact) != "low":
-        return False
-    item = _function(target, rel)
-    outputs = job.get("required_outputs", [])
-    if len(outputs) != 1:
-        raise ValueError(f"Verification job {job['id']} does not own exactly one result")
-    result = {
-        "schema_version": 2,
-        "function_id": item["id"],
-        "snapshot_commit": state.current_snapshot_commit(target),
-        "verdict": "INCONCLUSIVE",
-        "reasoning": None,
-        "gaps": {
-            "missing_evidence": ["independent normative behavioral contract"],
-            "reason": "The specification is low-confidence and contains only implementation observations; A-to-B verification cannot establish MATCH or MISMATCH.",
-        },
-        "error": None,
-    }
-    state.atomic_json(target / outputs[0], result)
-    scheduler.transition(target, job["id"], "start", None, None, "execution")
-    completed = scheduler.transition(target, job["id"], "complete", {
-        "job_id": job["id"],
-        "status": "completed",
-        "outputs": outputs,
-        "verdict": "INCONCLUSIVE",
-        "counts": {"deterministic_shortcut": 1},
-        "summary": "Deterministic low-confidence shortcut; no semantic Worker was launched.",
-    }, None, "execution")
-    if completed.get("status") != "succeeded":
-        raise ValueError(completed.get("message", f"failed to complete deterministic shortcut for {job['id']}"))
-    return True
-
-
 def prepare(target: Path, phase: str) -> dict:
     _active(target, phase)
     removed = _remove_unassigned_verification_results(target, phase)
-    deterministic_retries = 0
-    for job in _phase_jobs(target, phase):
-        if job.get("type") != "verify_function" or job.get("status") != "retryable" or len(job.get("artifacts", [])) != 1:
-            continue
-        artifact = state.fm_dir(target) / "extracted_functions" / job["artifacts"][0]
-        if state.spec_confidence(artifact) == "low":
-            scheduler.transition(target, job["id"], "retry", None, None, "execution")
-            deterministic_retries += 1
-    short_circuited = 0
-    # Dependencies can become ready as earlier deterministic jobs complete, so
-    # repeat until no further low-confidence verification can be admitted.
-    while True:
-        progressed = False
-        ready_ids = {job["id"] for job in scheduler.ready(target)}
-        for job in _phase_jobs(target, phase):
-            if job.get("id") in ready_ids and _low_confidence_result(target, job):
-                short_circuited += 1
-                progressed = True
-        if not progressed:
-            break
     jobs = _phase_jobs(target, phase)
     totals = {status: sum(1 for job in jobs if job.get("status") == status) for status in ("queued", "running", "retryable", "failed", "succeeded")}
     return {
         "phase": phase,
         "removed_unassigned_results": removed,
-        "deterministic_retries": deterministic_retries,
-        "short_circuited": short_circuited,
         "worker_jobs_remaining": totals["queued"] + totals["running"] + totals["retryable"],
         "totals": totals,
     }
@@ -174,6 +103,24 @@ def _source_for_artifact(target: Path, artifact: str) -> str | None:
     return source if isinstance(source, str) else None
 
 
+def _related_artifacts(target: Path, artifacts: list[str]) -> set[str]:
+    """Return direct callers/callees needed for FM-Agent top-down contracts."""
+    selected = set(artifacts)
+    related: set[str] = set()
+    graph = state.read_json(state.control_dir(target) / "graph_edges.json", {})
+    for edge in graph.get("edges", []) if isinstance(graph, dict) else []:
+        if not isinstance(edge, dict):
+            continue
+        caller, callee = edge.get("caller_artifact"), edge.get("callee_artifact")
+        if not isinstance(caller, str) or not isinstance(callee, str):
+            continue
+        if caller in selected:
+            related.add(callee)
+        if callee in selected:
+            related.add(caller)
+    return related - selected
+
+
 def _read_paths(target: Path, job: dict) -> list[str]:
     paths = {
         f"fm_agent_skill/jobs/{job['id']}.json",
@@ -191,6 +138,7 @@ def _read_paths(target: Path, job: dict) -> list[str]:
             "fm_agent/spec_prompts/system_prompt.md",
             "fm_agent/spec_prompts/domain_context/engine_overview.txt",
             "fm_agent/spec_prompts/domain_context/user_knowledge/manifest.json",
+            "fm_agent_skill/control/graph_edges.json",
         })
         for artifact in job.get("artifacts", []):
             paths.add(f"fm_agent/extracted_functions/{artifact}")
@@ -204,6 +152,18 @@ def _read_paths(target: Path, job: dict) -> list[str]:
                 rel = _relative(target, candidate)
                 if rel:
                     paths.add(rel)
+                paths.update(
+                    source for source in payload.get("source_files", [])
+                    if isinstance(source, str) and Path(source).suffix.lower() in PUBLIC_INTERFACE_SUFFIXES
+                )
+        for artifact in _related_artifacts(target, job.get("artifacts", [])):
+            extracted = f"fm_agent/extracted_functions/{artifact}"
+            paths.add(extracted)
+            paths.add(extracted + ".spec.json")
+            paths.add(extracted + ".info.json")
+            source = _source_for_artifact(target, artifact)
+            if source:
+                paths.add(source)
         for candidate in (state.fm_dir(target) / "spec_prompts" / "domain_context").glob("phase_*_types.txt"):
             rel = _relative(target, candidate)
             if rel:

@@ -274,9 +274,10 @@ the deterministic semantic execution after planning:
 ```
 
 Preparation removes only unassigned verification JSON from the private
-snapshot and completes every valid low-confidence verification job as
-`INCONCLUSIVE` without launching a host Worker. It never derives `MATCH` or
-`MISMATCH`. A zero `worker_jobs_remaining` means no semantic subagent is needed.
+snapshot. It never derives a semantic verdict: every planned verification job,
+including an `unavailable` contract, must be dispatched to the registered
+FM-Agent reasoner Worker. A zero `worker_jobs_remaining` is valid only when all
+planned artifacts already have current, schema-valid results.
 
 Lease remaining work in a host-sized bounded group:
 
@@ -311,12 +312,15 @@ another dispatch only after every previously leased ticket was submitted or
 failed. Finish with `semantic_executor.py phase-receipt`; `wait_or_finish` is
 not itself proof that the phase gate passed.
 
-For each specification job, use only the ticket's assigned extracted artifacts
-and permitted user-requirement, public-API, and caller-contract evidence. Generated
-domain context is observation-only. Do not read test files. Require
-the worker to emit normative evidence, observations, and confidence in every
-spec sidecar; never schedule a `MATCH` from a low-confidence,
-observation-only contract.
+For each specification job, follow FM-Agent's intended-behavior process. First
+derive condition B from domain role, public interface, callers, paired APIs,
+types, and cross-function invariants; then inspect the body as implementation
+observation A. Generated domain context guides inference but is not quoted
+evidence. Do not read test files. Require the Worker to emit schema-v3
+`contract_basis`, normative evidence, inference evidence, implementation
+observations, and confidence. `normative` and `inferred` contracts both proceed
+to A→B Verification; `unavailable` is exceptional and still receives a Worker
+result rather than an executor shortcut.
 
 For incremental planning, give `fm-incremental-spec-plan-worker` exactly one
 assigned output: `fm_agent_skill/worker_reports/<job-id>.json`. It writes the
@@ -419,10 +423,13 @@ Write `MISMATCH` only for a function's own specification violation. If the
 function is affected solely by a mismatching callee, write `DEPENDENCY_RISK`
 with the affected callee IDs and do not send it to Bug Validator. Require the
 Verification Worker to derive actual postcondition A and return the exact
-schema-v2 structured A→B result from `artifact-contract.md`. A `MISMATCH`
-without high-confidence B, a concrete counterexample, non-empty reason, and an
-exact offending source quote is an invalid worker output: retry it and never
-schedule it for Bug Validator. Before the
+schema-v2 result envelope from `artifact-contract.md`. A `MISMATCH` without a
+normative or inferred B, a concrete counterexample, non-empty reason, and an
+exact offending source quote is invalid: retry it and never schedule it for Bug
+Validator. Do not complete Verification when fewer than half the selected
+functions have an independent contract, fewer than half reach MATCH/MISMATCH,
+or any result is `ERROR`; the stage gate reports `insufficient_specification` or
+`verification_incomplete`. Before the
 first direct candidate, detect and record the safe build adapter:
 
 ```bash

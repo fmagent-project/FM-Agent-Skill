@@ -36,13 +36,19 @@ BUG_ATTEMPT_CLASSIFICATIONS = {"confirmed", "not_reproduced", "inconclusive"}
 BUG_FINAL_STATUSES = {"confirmed", "rejected", "inconclusive"}
 SPEC_FIELDS = {
     "schema_version", "signature", "pre_condition", "post_condition",
-    "normative_evidence", "observations", "confidence",
+    "contract_basis", "normative_evidence", "inference_evidence",
+    "observations", "confidence",
 }
 CALLEE_FIELDS = {"name", "signature", "pre_condition", "post_condition"}
 ROOT_NORMATIVE_EVIDENCE_KINDS = {"user_requirement", "public_api_contract"}
 NORMATIVE_EVIDENCE_KINDS = ROOT_NORMATIVE_EVIDENCE_KINDS | {"caller_contract"}
+INFERENCE_EVIDENCE_KINDS = {
+    "interface_name", "caller_expectation", "paired_api",
+    "cross_function_consistency", "type_invariant",
+}
 OBSERVATION_KINDS = {"implementation"}
-SPEC_CONFIDENCE = {"high", "low"}
+SPEC_CONTRACT_BASES = {"normative", "inferred", "unavailable"}
+SPEC_CONFIDENCE = {"high", "medium", "low"}
 OBSERVATIONAL_CONTEXT_MARKER = "FM_AGENT_OBSERVATIONAL_CONTEXT_V1"
 _ORACLE_MARKER = re.compile(
     r"(?:\bBUG\s*:|\bFIXME\s*:|\bTODO\s*:|\bseeded[ -]bug\b|"
@@ -345,24 +351,35 @@ def _spec_schema_ready(data) -> tuple[bool, str]:
         if extra:
             details.append("unsupported fields: " + ", ".join(extra))
         return False, "spec sidecar fields must match schema exactly (" + "; ".join(details) + ")"
-    if data.get("schema_version") != 2:
-        return False, "spec sidecar schema_version must be 2"
+    if data.get("schema_version") != 3:
+        return False, "spec sidecar schema_version must be 3"
     if not all(isinstance(data[field], str) and data[field].strip() for field in ("signature", "pre_condition", "post_condition")):
         return False, "signature, pre_condition, and post_condition must be non-empty strings"
     normative = data.get("normative_evidence")
+    inferred = data.get("inference_evidence")
     observations = data.get("observations")
     if not isinstance(normative, list) or not all(_valid_evidence_item(item, NORMATIVE_EVIDENCE_KINDS) for item in normative):
-        return False, "normative_evidence must contain only exact schema-v2 evidence objects"
+        return False, "normative_evidence must contain only exact schema-v3 evidence objects"
+    if not isinstance(inferred, list) or not all(_valid_evidence_item(item, INFERENCE_EVIDENCE_KINDS) for item in inferred):
+        return False, "inference_evidence must contain only exact schema-v3 inference objects"
     if not isinstance(observations, list) or not all(_valid_evidence_item(item, OBSERVATION_KINDS) for item in observations):
         return False, "observations must contain only exact implementation evidence objects"
+    basis = data.get("contract_basis")
+    if basis not in SPEC_CONTRACT_BASES:
+        return False, "contract_basis must be normative, inferred, or unavailable"
     confidence = data.get("confidence")
     if confidence not in SPEC_CONFIDENCE:
-        return False, "confidence must be high or low"
-    if confidence == "high":
+        return False, "confidence must be high, medium, or low"
+    if basis == "normative":
+        if confidence != "high":
+            return False, "normative contract requires high confidence"
         if not ({item["kind"] for item in normative} & ROOT_NORMATIVE_EVIDENCE_KINDS):
-            return False, "high confidence requires user_requirement or public_api_contract evidence"
-    elif normative or not observations:
-        return False, "low confidence requires empty normative_evidence and at least one implementation observation"
+            return False, "normative contract requires user_requirement or public_api_contract evidence"
+    elif basis == "inferred":
+        if confidence != "medium" or ({item["kind"] for item in normative} & ROOT_NORMATIVE_EVIDENCE_KINDS) or not inferred:
+            return False, "inferred contract requires medium confidence, inference evidence, and no root normative evidence"
+    elif confidence != "low" or normative or inferred or not observations:
+        return False, "unavailable contract requires low confidence, no contract evidence, and at least one implementation observation"
     return True, ""
 
 
@@ -497,6 +514,20 @@ def _spec_evidence_ready(artifact: Path, spec: dict, visited: set[Path] | None =
                 return False, "user requirement must quote copied user knowledge exactly"
         elif rel.startswith(("fm_agent/", "fm_agent_skill/")) or is_test_source_path(rel) or not _snapshot_file(project, path) or not _quote_is_documentation(path, text, item["quote"]):
             return False, "public API evidence must quote non-generated documentation or a source comment exactly"
+    for item in spec["inference_evidence"]:
+        combined = "\n".join([item["quote"], *item["claims"]])
+        if _ORACLE_MARKER.search(combined):
+            return False, "inference evidence contains benchmark/debug oracle markers"
+        if not all(claim in contract_text for claim in item["claims"]):
+            return False, "inference evidence claim is not represented verbatim in the contract"
+        path = _relative_file(project, item["source"])
+        if path is None:
+            return False, "inference evidence source is missing or outside the project snapshot"
+        rel = path.relative_to(project).as_posix()
+        if rel.startswith(("fm_agent/", "fm_agent_skill/")) or is_test_source_path(rel) or not _snapshot_file(project, path):
+            return False, "inference evidence must quote a tracked production source or public interface"
+        if item["quote"] not in path.read_text(encoding="utf-8", errors="replace"):
+            return False, "inference evidence quote is not present in its source"
     for item in spec["observations"]:
         path = _relative_file(project, item["source"])
         if path is None or path.relative_to(project).as_posix().startswith(("fm_agent/", "fm_agent_skill/")) or not _snapshot_file(project, path):
@@ -512,6 +543,14 @@ def spec_confidence(artifact: Path) -> str | None:
         return None
     ready, _ = _spec_evidence_ready(artifact, spec)
     return spec.get("confidence") if ready else None
+
+
+def spec_contract_basis(artifact: Path) -> str | None:
+    spec = read_json(Path(f"{artifact}.spec.json"), None)
+    if not _valid_spec(spec):
+        return None
+    ready, _ = _spec_evidence_ready(artifact, spec)
+    return spec.get("contract_basis") if ready else None
 
 
 def _valid_info(data) -> bool:
@@ -668,10 +707,10 @@ def verification_result_ready(project: Path, artifact: Path, function_id: str, r
     if verdict not in VERDICTS:
         return False, "verification verdict is invalid"
     spec = read_json(Path(f"{artifact}.spec.json"), None)
-    confidence = spec_confidence(artifact)
+    basis = spec_contract_basis(artifact)
     if verdict in {"MATCH", "MISMATCH"}:
-        if confidence != "high":
-            return False, f"low-confidence specification cannot prove {verdict}"
+        if basis not in {"normative", "inferred"}:
+            return False, f"unavailable specification contract cannot establish {verdict}"
         if result.get("gaps") is not None or result.get("error") is not None:
             return False, f"{verdict} must use structured reasoning rather than gaps/error"
         return _postcondition_reasoning_ready(artifact, spec, result.get("reasoning"), verdict == "MISMATCH")
@@ -748,8 +787,51 @@ def selected_verification_ready(project: Path, functions: list[dict]) -> tuple[b
     return True, ""
 
 
+def verification_coverage(project: Path, functions: list[dict]) -> dict:
+    """Summarize semantic coverage after every result passed schema validation."""
+    counts = {verdict: 0 for verdict in sorted(VERDICTS)}
+    bases = {basis: 0 for basis in sorted(SPEC_CONTRACT_BASES)}
+    results = fm_dir(project) / "logic_verification_results"
+    for item in functions:
+        rel = item.get("artifact") if isinstance(item, dict) else None
+        if not isinstance(rel, str):
+            continue
+        artifact = fm_dir(project) / "extracted_functions" / rel
+        basis = spec_contract_basis(artifact)
+        if basis in bases:
+            bases[basis] += 1
+        result = read_json(results / Path(rel).with_suffix(".json"), {})
+        verdict = result.get("verdict") if isinstance(result, dict) else None
+        if verdict in counts:
+            counts[verdict] += 1
+    conclusive = counts["MATCH"] + counts["MISMATCH"]
+    return {
+        "total": len(functions),
+        "contract_bases": bases,
+        "verdicts": counts,
+        "conclusive": conclusive,
+        "conclusive_ratio": (conclusive / len(functions)) if functions else 0.0,
+    }
+
+
+def verification_coverage_ready(project: Path, functions: list[dict]) -> tuple[bool, str]:
+    """Require majority semantic coverage before creating an official baseline."""
+    coverage = verification_coverage(project, functions)
+    if not functions:
+        return False, "insufficient_specification: verification scope is empty"
+    independent = coverage["contract_bases"]["normative"] + coverage["contract_bases"]["inferred"]
+    required = (len(functions) + 1) // 2
+    if independent < required:
+        return False, f"insufficient_specification: only {independent}/{len(functions)} functions have an independent normative or inferred contract; at least {required} are required"
+    if coverage["verdicts"]["ERROR"]:
+        return False, f"verification_incomplete: {coverage['verdicts']['ERROR']} semantic worker result(s) ended in ERROR"
+    if coverage["conclusive"] < required:
+        return False, f"insufficient_specification: only {coverage['conclusive']}/{len(functions)} functions reached MATCH or MISMATCH; at least {required} are required"
+    return True, ""
+
+
 def direct_mismatch_ids(project: Path, selected_ids: set[str] | None = None) -> set[str]:
-    """Return only current, schema-valid, externally grounded direct candidates."""
+    """Return current, schema-valid normative or inferred direct candidates."""
     results = fm_dir(project) / "logic_verification_results"
     found = set()
     for item in (source_index(project) or {}).get("functions", []):
