@@ -3,6 +3,8 @@ import argparse, json
 from pathlib import Path
 from _common import project, state
 from isolation import marker
+import checkpoint
+import scheduler
 
 parser = argparse.ArgumentParser(description="Read existing FM-Agent diagnostics without starting analysis.")
 parser.add_argument("--project", required=True); parser.add_argument("--bug-id")
@@ -10,13 +12,18 @@ args = parser.parse_args(); source = project(args)
 isolation = marker(source)
 snapshot_value = isolation.get("snapshot") if isinstance(isolation, dict) else None
 snapshot_available = isinstance(snapshot_value, str) and Path(snapshot_value).is_dir()
-target = Path(snapshot_value).resolve() if snapshot_available else source
+checkpoint_state = None
+if not snapshot_available:
+    try: checkpoint_state = checkpoint.validate(source, repair_current=False)
+    except checkpoint.CheckpointError as exc: checkpoint_state = {"ok": False, "reason": str(exc)}
+target = Path(snapshot_value).resolve() if snapshot_available else checkpoint.root(source) / "current"
 summary = state.read_json(state.fm_dir(target) / "bug_validation" / "summary.json", {})
-run = state.read_json(state.skill_dir(target) / "active.json", {})
-verification = state.read_json(state.control_dir(target) / "phase_receipts" / "verification.json", {})
+run = state.read_json(state.skill_dir(target) / "active.json", {}) if snapshot_available else state.read_json(target / "recovery" / "active.json", {})
+control = state.control_dir(target) if snapshot_available else target / "recovery" / "control"
+verification = state.read_json(control / "phase_receipts" / "verification.json", {})
 if not verification:
-    verification = state.read_json(state.control_dir(target) / "phase_receipts" / "verify_affected.json", {})
-resumable = state.inspect_resume(target)
+    verification = state.read_json(control / "phase_receipts" / "verify_affected.json", {})
+resumable = state.inspect_resume(target) if snapshot_available else ({"ok": True, "mode": run.get("mode"), "resume_from_phase": state.first_incomplete_phase(run)} if checkpoint_state and checkpoint_state.get("ok") else {"ok": False, "reason": checkpoint_state.get("reason") if isinstance(checkpoint_state, dict) else "checkpoint unavailable"})
 failure = state.read_json(state.skill_dir(source) / "failure.json", {})
 status = run.get("status") if isinstance(run, dict) else None
 official = status in {"succeeded", "noop"} and not failure
@@ -32,6 +39,9 @@ result = {
         "snapshot_available": snapshot_available,
     },
     "failure": failure,
+    "checkpoint": checkpoint_state,
+    "scheduler": scheduler.aggregate(source) if (checkpoint.root(source) / "state.db").is_file() else {},
+    "legacy_json_jobs": len(list((state.skill_dir(source) / "jobs").glob("*.json"))),
     "resume": {
         "available": bool(resumable.get("ok")),
         "mode": resumable.get("mode"),

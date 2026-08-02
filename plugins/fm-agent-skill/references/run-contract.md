@@ -17,12 +17,15 @@ private Git snapshot commit and runs the selected mode in its detached worktree.
 understanding, extraction, specification generation, or reasoning. Those are
 the coding agent's responsibilities under the run skill.
 
-`diagnose.py` is the terminal authority check. A run may be described as an
-FM-Agent result only when `result_authority.official_result_available` is true.
+`terminal_report.py` is the sole terminal authority. A run may expose findings
+only when `official_result_available` is true. `diagnose.py` remains read-only
+operational inspection.
 An isolated failure writes `fm_agent_skill/failure.json` to the original
-worktree and retains semantic artifacts only in its resumable snapshot.
+worktree and commits the latest valid semantic artifacts to
+`fm_agent_skill/checkpoint/`; the detached worktree remains only a disposable
+execution cache.
 
-An explicit `--resume` is separate from the table above. It continues the
-newest eligible interrupted full or incremental run only after exact source and
+Ordinary run automatically resumes when compatible; explicit `--resume` is
+also supported. It continues the eligible interrupted analysis after exact source and
 configuration checks; see [resume-contract.md](resume-contract.md). It does
 not create a baseline, select a new mode, or replace the active analysis.

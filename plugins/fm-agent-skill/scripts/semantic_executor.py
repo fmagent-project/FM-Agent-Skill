@@ -24,6 +24,7 @@ WORKERS = {
     "domain_context": "fm-domain-context-worker",
     "spec_batch": "fm-spec-batch-worker",
     "verify_function": "fm-verify-function-worker",
+    "verify_batch": "fm-verify-function-worker",
 }
 PUBLIC_INTERFACE_SUFFIXES = {".h", ".hh", ".hpp", ".hxx", ".inc", ".inl"}
 
@@ -34,8 +35,11 @@ def _active(target: Path, phase: str) -> dict:
     record = state.active_record(target)
     if not isinstance(record, dict) or record.get("status") != "running":
         raise ValueError("semantic execution requires a running FM-Agent analysis")
-    if record.get("current_phase") != phase:
-        raise ValueError(f"cannot execute {phase} while current phase is {record.get('current_phase')}")
+    if phase != record.get("current_phase") and phase not in record.get("phases", []) and not (
+        phase == "verification" and record.get("mode") == "full"
+        or phase == "verify_affected" and record.get("mode") == "incremental"
+    ):
+        raise ValueError(f"phase is not part of the active DAG: {phase}")
     if record.get("snapshot_commit") != state.current_snapshot_commit(target):
         raise ValueError("active analysis snapshot does not match the current worktree")
     plan = state.read_json(state.control_dir(target) / "job_plans" / f"{phase}.json", None)
@@ -45,9 +49,7 @@ def _active(target: Path, phase: str) -> dict:
 
 
 def _phase_jobs(target: Path, phase: str) -> list[dict]:
-    root = state.skill_dir(target) / "jobs"
-    jobs = [state.read_json(path, {}) for path in sorted(root.glob("*.json"))] if root.is_dir() else []
-    return [job for job in jobs if isinstance(job, dict) and job.get("phase") == phase]
+    return scheduler.jobs_for_phase(target, phase)
 
 
 def _verification_expected(target: Path, phase: str) -> set[str]:
@@ -173,13 +175,13 @@ def _read_paths(target: Path, job: dict) -> list[str]:
                 paths.add(rel)
         manifest = state.read_json(target / "fm_agent/spec_prompts/domain_context/user_knowledge/manifest.json", {})
         paths.update(item["copied_path"] for item in manifest.get("entries", []) if isinstance(item, dict) and isinstance(item.get("copied_path"), str))
-    elif kind == "verify_function":
-        artifact = job["artifacts"][0]
-        paths.update({
-            f"fm_agent/extracted_functions/{artifact}",
-            f"fm_agent/extracted_functions/{artifact}.spec.json",
-            f"fm_agent/extracted_functions/{artifact}.info.json",
-        })
+    elif kind in {"verify_function", "verify_batch"}:
+        for artifact in job["artifacts"]:
+            paths.update({
+                f"fm_agent/extracted_functions/{artifact}",
+                f"fm_agent/extracted_functions/{artifact}.spec.json",
+                f"fm_agent/extracted_functions/{artifact}.info.json",
+            })
     return sorted(path for path in paths if (target / path).exists())
 
 
@@ -204,6 +206,8 @@ def _ticket(target: Path, job: dict) -> dict:
     ticket = {
         "schema_version": 2,
         "job_id": job["id"],
+        "attempt": job.get("attempts"),
+        "input_hash": job.get("input_hash"),
         "phase": job["phase"],
         "worker": worker,
         "worker_definition": str(definition),
@@ -260,7 +264,11 @@ def submit(target: Path, job_id: str, receipt: dict) -> dict:
     job = _checked_ticket(target, job_id)
     if job.get("status") != "running":
         raise ValueError("only a dispatched running job can be submitted")
-    completed = scheduler.transition(target, job_id, "complete", receipt, None, "execution")
+    ticket = state.read_json(state.control_dir(target) / "dispatches" / f"{job_id}.json", {})
+    completed = scheduler.transition(
+        target, job_id, "complete", receipt, None, "execution",
+        ticket.get("attempt"), ticket.get("input_hash"), None,
+    )
     return {
         "action": "completed" if completed.get("status") == "succeeded" else "retry_required",
         "job": completed,

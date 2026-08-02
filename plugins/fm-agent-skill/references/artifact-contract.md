@@ -5,6 +5,10 @@ forward slashes.
 
 All mutable Skill state lives under `fm_agent_skill/`.
 
+`fm_agent_skill/checkpoint/` is the cross-session authority: SQLite WAL,
+SHA-256 objects, phase manifests, atomic HEAD, complete `current/fm_agent/`,
+and the explicit `current/recovery/` allowlist. Never copy it recursively.
+
 - `fm_agent/phases.json` uses FM-Agent's phase/module form, including source
   files and inter-phase dependencies. Test sources are excluded from this
   contract and from all analysis inputs.
@@ -147,9 +151,9 @@ the latest commit in `fm_agent/version.log`. `baseline.json` stores only the
 successful run's configuration and completion provenance; source and function
 hashes are not persisted.
 
-`fm_agent_skill/jobs/<job-id>.json` records a current host worker's phase,
+`fm_agent_skill/jobs/<job-id>.json` mirrors a current host worker's phase,
 type, dependencies, permitted/required outputs, attempt count, terminal status,
-and a compact worker receipt. Workers never write these manifests. They are
+and a compact worker receipt. SQLite is authoritative; Workers never write these manifests. They are
 deleted after a successful terminal analysis, and retained only while a failed
 analysis remains resumable. A receipt is at most 4 KiB and includes matching
 `job_id`, non-empty `status`, output paths, optional verdict, and short summary.

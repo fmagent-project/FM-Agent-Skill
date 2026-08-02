@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from _common import project, state
+import complexity
 import scheduler
 
 
@@ -18,8 +19,12 @@ def _active(target: Path, phase: str) -> dict:
     record = state.active_record(target)
     if not isinstance(record, dict) or record.get("status") != "running":
         raise ValueError("job planning requires a running FM-Agent analysis")
-    if record.get("current_phase") != phase:
-        raise ValueError(f"cannot plan {phase} while current phase is {record.get('current_phase')}")
+    current = record.get("current_phase")
+    allowed = {current}
+    if current in {"specification", "update_specs"}:
+        allowed.update({"verification", "verify_affected", "bug_validation"})
+    if phase not in allowed:
+        raise ValueError(f"cannot plan {phase} while earliest incomplete phase is {current}")
     if state.current_snapshot_commit(target) != record.get("snapshot_commit"):
         raise ValueError("active analysis snapshot does not match the current worktree")
     return record
@@ -67,9 +72,14 @@ def _ensure_job(target: Path, payload: dict) -> tuple[str, bool]:
 
 def _existing_job(target: Path, phase: str, kind: str, artifacts: list[str] | None = None, function_id: str | None = None) -> dict | None:
     matches = []
-    root = state.skill_dir(target) / "jobs"
-    for path in sorted(root.glob("*.json")) if root.is_dir() else []:
-        job = state.read_json(path, {})
+    connection = scheduler._connect(target)
+    rows = connection.execute(
+        "SELECT payload_json FROM jobs WHERE phase=? AND type=? ORDER BY job_id",
+        (phase, kind),
+    ).fetchall()
+    connection.close()
+    for row in rows:
+        job = json.loads(row["payload_json"])
         if not isinstance(job, dict) or job.get("phase") != phase or job.get("type") != kind:
             continue
         if artifacts is not None and job.get("artifacts") != artifacts:
@@ -106,9 +116,7 @@ def _layer_files(target: Path) -> list[Path]:
 def _specification(target: Path, record: dict, phase: str) -> dict:
     selected = _selected(target, record, phase)
     expected = {item["artifact"] for item in selected}
-    batch_size = _config(target, record).get("spec_batch_size", 8)
-    if not isinstance(batch_size, int) or batch_size < 1:
-        raise ValueError("spec_batch_size must be a positive integer")
+    config = _config(target, record)
     created = 0
     context_id = None
     if not state.specification_context_ready(target)[0]:
@@ -153,9 +161,8 @@ def _specification(target: Path, record: dict, phase: str) -> dict:
                 else:
                     pending.append(artifact)
             current_layer_jobs = []
-            for offset in range(0, len(pending), batch_size):
-                batch = pending[offset:offset + batch_size]
-                batch_number = offset // batch_size + 1
+            for batch_number, batch_info in enumerate(complexity.partition(target, pending, config, "spec_batch"), 1):
+                batch = batch_info["artifacts"]
                 job_id = f"{phase}-spec-p{phase_number:02d}-l{layer_number:03d}-b{batch_number:03d}"
                 dependencies = list(dict.fromkeys([*phase_base, *prior_layer_jobs]))
                 outputs = [value for artifact in batch for value in (
@@ -169,6 +176,7 @@ def _specification(target: Path, record: dict, phase: str) -> dict:
                     _, made = _ensure_job(target, {
                         "id": job_id, "phase": phase, "type": "spec_batch",
                         "depends_on": dependencies, "required_outputs": outputs, "artifacts": batch,
+                        "input": {"complexity": batch_info},
                     })
                 created += int(made); current_layer_jobs.append(job_id)
                 entries.extend({"artifact": artifact, "job_id": job_id} for artifact in batch)
@@ -178,29 +186,64 @@ def _specification(target: Path, record: dict, phase: str) -> dict:
     if seen != expected:
         missing = sorted(expected - seen)
         raise ValueError("phase layers do not cover selected functions: " + ", ".join(missing[:3]))
-    return _write_plan(target, record, phase, entries, created)
+    result = _write_plan(target, record, phase, entries, created)
+    # Build downstream jobs now. Their per-function dependencies keep them
+    # blocked until the corresponding spec batch succeeds, enabling streaming
+    # without weakening caller-first specification ordering.
+    if config.get("spec_batch_size") is None:
+        downstream = "verify_affected" if record.get("mode") == "incremental" else "verification"
+        result["streaming_verification_plan"] = _verification(target, record, downstream)["plan_path"]
+    return result
 
 
 def _verification(target: Path, record: dict, phase: str) -> dict:
     functions = _selected(target, record, phase)
     entries, created = [], 0
-    for ordinal, item in enumerate(sorted(functions, key=lambda value: value["artifact"]), 1):
+    pending = []
+    spec_plan = state.read_json(state.control_dir(target) / "job_plans" / "specification.json", {})
+    if record.get("mode") == "incremental":
+        spec_plan = state.read_json(state.control_dir(target) / "job_plans" / "update_specs.json", spec_plan)
+    spec_jobs = {
+        entry.get("artifact"): entry.get("job_id") for entry in spec_plan.get("entries", [])
+        if isinstance(entry, dict) and isinstance(entry.get("artifact"), str)
+    }
+    function_by_artifact = {item["artifact"]: item for item in functions}
+    for item in sorted(functions, key=lambda value: value["artifact"]):
         artifact = item["artifact"]
         source = state.fm_dir(target) / "extracted_functions" / artifact
         output = f"fm_agent/logic_verification_results/{Path(artifact).with_suffix('.json').as_posix()}"
         result = state.read_json(target / output, None)
         if state.verification_result_ready(target, source, item["id"], result)[0]:
             entries.append({"artifact": artifact, "job_id": None}); continue
+        pending.append(artifact)
+    batches = complexity.partition(target, pending, _config(target, record), "verify_batch")
+    # A pair is cheaper and more failure-isolated as two compatibility jobs;
+    # normal batches begin at three functions, while simple layers can grow to
+    # the configured 10-20 range.
+    batches = [
+        {**batch, "artifacts": [artifact]}
+        for batch in batches if len(batch["artifacts"]) < 3 for artifact in batch["artifacts"]
+    ] + [batch for batch in batches if len(batch["artifacts"]) >= 3]
+    for ordinal, batch in enumerate(batches, 1):
+        artifacts = batch["artifacts"]
+        outputs = [f"fm_agent/logic_verification_results/{Path(item).with_suffix('.json').as_posix()}" for item in artifacts]
+        dependencies = list(dict.fromkeys(spec_jobs.get(item) for item in artifacts if spec_jobs.get(item)))
+        kind = "verify_function" if len(artifacts) == 1 else "verify_batch"
         job_id = f"{phase}-verify-{ordinal:05d}"
-        existing_job = _existing_job(target, phase, "verify_function", artifacts=[artifact])
+        existing_job = _existing_job(target, phase, kind, artifacts=artifacts)
         if existing_job:
             job_id, made = existing_job["id"], False
         else:
             _, made = _ensure_job(target, {
-                "id": job_id, "phase": phase, "type": "verify_function",
-                "depends_on": [], "required_outputs": [output], "artifacts": [artifact],
+                "id": job_id, "phase": phase, "type": kind,
+                "depends_on": dependencies, "required_outputs": outputs, "artifacts": artifacts,
+                "input": {
+                    "function_ids": [function_by_artifact[item]["id"] for item in artifacts],
+                    "complexity": batch,
+                },
             })
-        created += int(made); entries.append({"artifact": artifact, "job_id": job_id})
+        created += int(made)
+        entries.extend({"artifact": artifact, "job_id": job_id} for artifact in artifacts)
     return _write_plan(target, record, phase, entries, created)
 
 

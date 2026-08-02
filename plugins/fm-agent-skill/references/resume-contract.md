@@ -1,59 +1,40 @@
 # Resume contract
 
-Resume continues one interrupted `full` or `incremental` run. It is explicit:
-ordinary `run` selection never treats an incomplete run as an automatic
-incremental analysis.
+Resume continues one interrupted `full` or `incremental` analysis. Ordinary
+run auto-selects continuation when every identity check passes; explicit
+`--resume` remains compatible and never creates a new run.
 
 ## Eligibility
 
-`orchestrate.py resume-inspect` selects the newest run whose status is
-`running`, `failed`, or `interrupted`. It accepts the run only when all of the
-following hold:
+Require all of the following:
 
-- Its immutable effective configuration and auxiliary-input fingerprints still match.
-- Its retained worktree still has `HEAD` at the saved `snapshot_commit`.
-- It has a valid active analysis record, phase list, and a first incomplete phase.
-- It was created with resumable Git-snapshot state.
+- `refs/fm-agent-skill/active` and a complete persistent checkpoint exist.
+- Snapshot commit, fingerprint, saved configuration, plugin version, source
+  commit, Worker-definition hash, and state/scheduler schemas match.
+- No unexpired Coordinator lease exists. Require explicit takeover while a
+  fresh lease may still represent live work.
+- The active record has a valid phase list and first incomplete task.
 
-Do not pass a new note, scope, knowledge file, supplemental edge file,
-`one_phase` or backend choice to a resume. Source changes in the original
-worktree do not change the retained snapshot; resume always analyzes the saved
-commit rather than silently switching to newer code.
+Do not accept a new note, scope, knowledge, supplemental edges, `one_phase`, or
+backend choice. Report every differing field; never silently start a fresh run.
 
-## Lock ownership
+## Worktree reconstruction
 
-Resume reuses the existing active analysis but obtains a new lock lease. If its
-heartbeat is newer than `resume_grace_seconds` (default 600), treat it
-as potentially active and do not take it over. Request explicit user
-confirmation before retrying with `--take-over`. A lock owned by a different
-non-terminal run is never replaced by resume.
+If the recorded detached worktree exists, verify its `HEAD` and checkpoint
+HEAD. If it is missing, create a new detached worktree at the active ref,
+restore `checkpoint/current/fm_agent`, then restore only recovery
+`active.json`, `config.json`, `jobs/`, `control/`, and `probes/`. Verify every
+manifest and SHA-256 object. Exact restoration applies tombstones, so a deleted
+artifact cannot reappear. A missing active ref or complete checkpoint is
+non-resumable and must be named explicitly.
 
-## Checkpoints
+## Continuation
 
-`pipeline.py resume` validates every phase already marked `succeeded` using
-the normal stage gate. It then chooses the first phase not marked successful.
-It records the prior incomplete phase status in `phase_history`, increments
-`resume.count`, and returns the run to `running` without creating a new
-baseline.
+Reconcile expired SQLite leases before dispatch. An identical receipt is
+idempotent; an old attempt or changed hash is rejected. Re-enter only the first
+unfinished task. Do not regenerate a schema-valid completed spec or rerun an
+earlier successful phase. Preserve the saved graph backend.
 
-Re-enter the selected phase through `pipeline.py phase-start`; do not rerun
-earlier successful phases. A full-run `phase_cleanup` executes again only when
-it is itself the first incomplete phase.
-
-## Artifact reuse
-
-Within a resumed incomplete phase, preserve an artifact only when its current
-function identity and saved snapshot still match. Generate only missing or
-malformed work:
-
-- extraction: current function copies and analysis-index entries;
-- specification: paired schema-valid `.spec.json` and `.info.json` sidecars;
-- verification: schema-valid result records with matching function id and snapshot commit;
-- bug validation: current-run reports for unresolved direct `MISMATCH` items.
-
-For a resumed graph phase, keep the backend recorded in the run. A readable
-same-snapshot CodeGraph index may be reused; a missing or unreadable selected
-index must be rebuilt. A completed valid graph phase is not rebuilt merely
-because the run resumes later.
-
-Only `pipeline.py complete` may promote `refs/fm-agent-skill/baseline`.
+Only `pipeline.py complete` may promote `refs/fm-agent-skill/baseline` and
+publish root `fm_agent/`. Failure releases the Coordinator lease but retains the
+active ref and checkpoint for a later turn/session.

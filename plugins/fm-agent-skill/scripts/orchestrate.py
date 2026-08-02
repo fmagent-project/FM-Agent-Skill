@@ -12,6 +12,8 @@ from _common import project, state
 from config import DEFAULTS, load
 from isolation import clear_failure, create as create_snapshot, discard as discard_snapshot, marker as snapshot_marker
 from locking import acquire, reclaim_for_resume, release
+import checkpoint
+import versioning
 
 
 def valid_settings(target, config):
@@ -84,6 +86,33 @@ def main():
     if args.action == "inspect":
         result = inspect(source_target, args); print(json.dumps(result, ensure_ascii=False, indent=2)); raise SystemExit(0 if result["ok"] else 2)
     pending = snapshot_marker(source_target)
+    # A normal run is also a continuation request when the immutable snapshot,
+    # saved fingerprint/config, lease state, and checkpoint all still match.
+    if args.action == "dispatch" and not resume_overrides(args):
+        active_ref = state.git(source_target, "rev-parse", "--verify", "refs/fm-agent-skill/active", check=False)
+        checkpoint_head = checkpoint.root(source_target) / "HEAD"
+        if active_ref and checkpoint_head.is_file():
+            automatic = checkpoint.inspect_auto_resume(source_target)
+            if automatic.get("ok"):
+                target = Path(automatic["snapshot"]).resolve()
+                try:
+                    versioning.require_compatible(source_target)
+                    checked = state.inspect_resume(target)
+                    if not checked.get("ok"): raise RuntimeError(checked.get("reason", "checkpoint is not resumable"))
+                    lock = reclaim_for_resume(target, args.take_over)
+                    record = call_pipeline(target, "resume")
+                except Exception as exc:
+                    print(json.dumps({"ok": False, "reason": str(exc), "auto_resume": True}, ensure_ascii=False, indent=2)); raise SystemExit(2)
+                print(json.dumps({
+                    "ok": True, "mode": "resume", "auto_resume": True,
+                    "project": str(target), "source_project": str(source_target),
+                    "resume_from_phase": record["current_phase"], "config": checked["config"],
+                    "lock": lock, "analysis": record,
+                }, ensure_ascii=False, indent=2)); return
+            print(json.dumps(automatic, ensure_ascii=False, indent=2)); raise SystemExit(2)
+    if args.action in {"resume-inspect", "resume"} and not (isinstance(pending.get("snapshot"), str) and Path(pending["snapshot"]).is_dir()):
+        rebuilt = checkpoint.inspect_auto_resume(source_target)
+        if rebuilt.get("ok"): pending = snapshot_marker(source_target)
     target = Path(pending["snapshot"]).resolve() if args.action in {"resume-inspect", "resume"} and isinstance(pending.get("snapshot"), str) and Path(pending["snapshot"]).is_dir() else source_target
     if args.action == "dispatch" and isinstance(pending.get("snapshot"), str) and Path(pending["snapshot"]).is_dir():
         print(json.dumps({"ok": False, "reason": "an FM-Agent snapshot worktree is pending; use --resume or clean it first"}, ensure_ascii=False, indent=2)); raise SystemExit(2)
@@ -93,7 +122,7 @@ def main():
     if args.action == "resume":
         checked = {"ok": False, "reason": "resume cannot override current analysis settings"} if resume_overrides(args) else state.inspect_resume(target)
         if not checked["ok"]: print(json.dumps(checked, ensure_ascii=False, indent=2)); raise SystemExit(2)
-        try: lock = reclaim_for_resume(target, args.take_over); record = call_pipeline(target, "resume")
+        try: versioning.require_compatible(source_target); lock = reclaim_for_resume(target, args.take_over); record = call_pipeline(target, "resume")
         except Exception as exc:
             try: release(target, "failed")
             except RuntimeError: pass

@@ -146,7 +146,7 @@ def fingerprint(project: Path, one_phase: bool, submodules: list[str], extra_edg
     # an analysis.  It must not invalidate baselines or interrupted runs.
     fingerprint_config = dict(config or {})
     # Scheduling changes alter resource use, not the meaning of an analysis.
-    for key in ("resume_grace_seconds", "scheduler_executor", "max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "spec_batch_size", "retries", "lock_ttl_seconds", "bug_validation_max_attempts", "bug_validation_negative_retries", "bug_validation_execution", "probe_adapter"):
+    for key in ("resume_grace_seconds", "scheduler_executor", "max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "worker_target_tokens", "worker_max_functions", "worker_max_source_bytes", "worker_lease_seconds", "spec_batch_size", "retries", "lock_ttl_seconds", "bug_validation_max_attempts", "bug_validation_negative_retries", "bug_validation_execution", "probe_adapter"):
         fingerprint_config.pop(key, None)
     inputs = {
         "one_phase": bool(one_phase),
@@ -526,7 +526,7 @@ def semantic_job_plan_ready(project: Path, phase: str, functions: list[dict] | N
     identity_key = "artifact" if phase in artifact_phases else "function_id"
     expected = ({item.get("artifact") for item in functions or []} if identity_key == "artifact" else set(candidate_ids or set()))
     actual = set()
-    expected_type = "spec_batch" if phase == "specification" else "verify_function" if phase in {"verification", "verify_affected"} else "bug_validate"
+    expected_types = {"spec_batch"} if phase == "specification" else {"verify_function", "verify_batch"} if phase in {"verification", "verify_affected"} else {"bug_validate"}
     for entry in entries:
         if not isinstance(entry, dict) or set(entry) != {identity_key, "job_id"} or not isinstance(entry.get(identity_key), str):
             return False, f"invalid entry in deterministic job plan for {phase}"
@@ -537,9 +537,9 @@ def semantic_job_plan_ready(project: Path, phase: str, functions: list[dict] | N
         if job_id is None:
             continue
         job = read_json(skill_dir(project) / "jobs" / f"{job_id}.json", None)
-        if not isinstance(job, dict) or job.get("id") != job_id or job.get("phase") != phase or job.get("type") != expected_type:
+        if not isinstance(job, dict) or job.get("id") != job_id or job.get("phase") != phase or job.get("type") not in expected_types:
             return False, f"job plan references an invalid job: {job_id}"
-        if identity_key == "artifact" and identity not in job.get("artifacts", []):
+        if identity_key == "artifact" and identity not in job.get("artifacts", []) and identity not in job.get("completed_artifacts", []):
             return False, f"job {job_id} does not own planned artifact {identity}"
         if identity_key == "function_id" and job.get("input", {}).get("function_id") != identity:
             return False, f"job {job_id} does not own planned function {identity}"

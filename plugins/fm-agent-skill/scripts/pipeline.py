@@ -10,10 +10,21 @@ from locking import heartbeat, release
 from isolation import clear_failure, publish_failure, sync as sync_isolation
 from reset_full_artifacts import clear_transient, reset, reset_incremental_artifacts
 from stage_gate import validate
+import checkpoint
+import scheduler
 
 
 def save(target, record):
     state.atomic_json(state.skill_dir(target) / "active.json", record)
+
+
+def set_result_authority(target, available, reason=None):
+    state.atomic_json(checkpoint.root(target) / "official_result.json", {
+        "schema_version": 1,
+        "official_result_available": bool(available),
+        "reason": reason,
+        "updated_at": state.now(),
+    })
 
 
 def load_active(target):
@@ -25,9 +36,7 @@ def load_active(target):
 
 def phase_receipt_ready(target, phase):
     """Require a joined scheduler receipt only when this phase created new jobs."""
-    jobs_dir = state.skill_dir(target) / "jobs"
-    jobs = [state.read_json(path, {}) for path in jobs_dir.glob("*.json")] if jobs_dir.is_dir() else []
-    current = [job for job in jobs if isinstance(job, dict) and job.get("phase") == phase and not job.get("legacy_contract")]
+    current = [job for job in scheduler.jobs_for_phase(target, phase) if not job.get("legacy_contract")]
     if not current:
         return True, ""
     receipt = state.read_json(state.control_dir(target) / "phase_receipts" / f"{phase}.json", {})
@@ -43,8 +52,7 @@ def failure_message(target, record, requested):
     if isinstance(requested, str) and requested.strip():
         return requested.strip()
     phase = record.get("current_phase") or "unknown"
-    jobs_dir = state.skill_dir(target) / "jobs"
-    jobs = [state.read_json(path, {}) for path in sorted(jobs_dir.glob("*.json"))] if jobs_dir.is_dir() else []
+    jobs = scheduler.jobs_for_phase(target, phase)
     failures = [
         f"{job.get('id', 'unknown')}: {job.get('message') or job.get('failure_class') or job.get('status')}"
         for job in jobs
@@ -75,6 +83,7 @@ def main():
         fingerprint, inputs = scope(args, effective_config)
         snapshot_commit = state.git(target, "rev-parse", "HEAD")
         record = {"schema_version": 2, "mode": args.mode, "status": "running", "started_at": state.now(), "current_phase": state.PHASES[args.mode][0], "phases": state.PHASES[args.mode], "phase_status": {}, "phase_history": {}, "fingerprint": fingerprint, "inputs": inputs, "snapshot_commit": snapshot_commit, "resume": {"count": 0}}
+        set_result_authority(target, False, "analysis has not completed every phase gate")
     else:
         record = load_active(target); phase = args.phase or record.get("current_phase")
         if args.action == "resume":
@@ -106,23 +115,34 @@ def main():
             if not gate["ok"]: raise SystemExit(gate["reason"])
             record["phase_status"][phase] = {"status": "succeeded", "ended_at": state.now()}; index = record["phases"].index(phase)
             record["current_phase"] = record["phases"][index + 1] if index + 1 < len(record["phases"]) else phase
+            # The checkpoint contains the final record, but the live active
+            # state is only marked succeeded after durable HEAD is complete.
+            checkpoint.commit(target, phase, "succeeded", active_record=record)
         elif args.action == "phase-fail":
             message = failure_message(target, record, args.message)
             failure_class = "insufficient_specification" if message.startswith("insufficient_specification:") else "verification_incomplete" if message.startswith("verification_incomplete:") else "phase_failure"
             record["phase_status"][phase] = {"status": "failed", "ended_at": state.now(), "message": message, "classification": failure_class}
             record.update({"status": "failed", "ended_at": state.now(), "failure": message, "failure_classification": failure_class})
+            set_result_authority(target, False, message)
+            checkpoint.commit(target, phase, "failed", active_record=record, message=message)
         elif args.action == "complete":
             missing = [item for item in record["phases"] if record["phase_status"].get(item, {}).get("status") != "succeeded"]
             if missing: raise SystemExit("cannot complete: phase gates not passed: " + ", ".join(missing))
+            aggregate = scheduler.aggregate(target)
+            if not aggregate["converged"]: raise SystemExit("cannot complete: durable DAG has pending or failed jobs")
             record.update({"status": "succeeded", "ended_at": state.now()})
             commit = state.git(target, "rev-parse", "HEAD")
             if record.get("snapshot_commit") != commit: raise SystemExit("analysis worktree moved away from its saved snapshot commit")
             state.atomic_json(state.skill_dir(target) / "baseline.json", {"schema_version": 4, "baseline_commit": commit, "fingerprint": record["fingerprint"], "inputs": record["inputs"], "completed_at": record["ended_at"]})
             state.version_log(target, commit)
+            set_result_authority(target, True)
+            checkpoint.commit(target, "finalize", "succeeded", active_record=record)
         elif args.action == "fail":
             message = failure_message(target, record, args.message)
             failure_class = "insufficient_specification" if message.startswith("insufficient_specification:") else "verification_incomplete" if message.startswith("verification_incomplete:") else record.get("failure_classification", "pipeline_failure")
             record.update({"status": "failed", "ended_at": state.now(), "failure": message, "failure_classification": failure_class})
+            set_result_authority(target, False, message)
+            checkpoint.commit(target, phase, "failed", active_record=record, message=message)
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})
     record["updated_at"] = state.now(); save(target, record)
     if args.action in {"phase-fail", "fail"}: publish_failure(target, record)

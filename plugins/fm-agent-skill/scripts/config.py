@@ -16,7 +16,10 @@ DEFAULTS = {
     "verify_concurrency": 8,
     "bug_validation_concurrency": 2,
     "read_only_plan_concurrency": 2,
-    "spec_batch_size": 8, "bug_validation_max_attempts": 5, "bug_validation_negative_retries": 2,
+    "worker_target_tokens": 12000, "worker_max_functions": 20,
+    "worker_max_source_bytes": 262144, "worker_lease_seconds": 900,
+    "worker_prompt_change_policy": "invalidate",
+    "spec_batch_size": None, "bug_validation_max_attempts": 5, "bug_validation_negative_retries": 2,
     "bug_validation_execution": "agent-executed",
     "probe_adapter": "auto",
     "granularity": 40, "retries": 5, "lock_ttl_seconds": 7200, "resume_grace_seconds": 600,
@@ -58,6 +61,11 @@ def main():
     parser.add_argument("--read-only-plan-concurrency", type=int)
     parser.add_argument("--scheduler-executor", choices=("host-subagent",))
     parser.add_argument("--spec-batch-size", type=int)
+    parser.add_argument("--worker-target-tokens", type=int)
+    parser.add_argument("--worker-max-functions", type=int)
+    parser.add_argument("--worker-max-source-bytes", type=int)
+    parser.add_argument("--worker-lease-seconds", type=int)
+    parser.add_argument("--worker-prompt-change-policy", choices=("invalidate", "allow_prompt_only"))
     parser.add_argument("--bug-validation-max-attempts", type=int)
     parser.add_argument("--bug-validation-negative-retries", type=int)
     parser.add_argument("--bug-validation-execution", choices=("agent-executed", "adapter"))
@@ -78,7 +86,7 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
     if args.action == "set":
-        for key in ("max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "scheduler_executor", "spec_batch_size", "bug_validation_max_attempts", "bug_validation_negative_retries", "bug_validation_execution", "probe_adapter", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
+        for key in ("max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "scheduler_executor", "worker_target_tokens", "worker_max_functions", "worker_max_source_bytes", "worker_lease_seconds", "worker_prompt_change_policy", "spec_batch_size", "bug_validation_max_attempts", "bug_validation_negative_retries", "bug_validation_execution", "probe_adapter", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds", "codegraph_path", "call_graph_backend", "extra_edge"):
             value = getattr(args, key)
             if value is not None: config[key] = value
         if args.submodules is not None: config["submodules"] = args.submodules
@@ -86,8 +94,9 @@ def main():
         for key in ("one_phase",):
             value = getattr(args, key)
             if value is not None: config[key] = value == "true"
-        for key in ("max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "spec_batch_size", "bug_validation_max_attempts", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds"):
+        for key in ("max_active_subagents", "spec_concurrency", "verify_concurrency", "bug_validation_concurrency", "read_only_plan_concurrency", "worker_target_tokens", "worker_max_functions", "worker_max_source_bytes", "worker_lease_seconds", "bug_validation_max_attempts", "granularity", "retries", "lock_ttl_seconds", "resume_grace_seconds"):
             if config[key] < 1: parser.error(f"{key.replace('_', '-')} must be positive")
+        if config.get("spec_batch_size") is not None and config["spec_batch_size"] < 1: parser.error("spec-batch-size must be positive")
         if config["bug_validation_negative_retries"] < 0: parser.error("bug-validation-negative-retries must be non-negative")
         save(target, config)
     print(json.dumps(config, ensure_ascii=False, indent=2))

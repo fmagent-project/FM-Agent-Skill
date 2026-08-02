@@ -53,9 +53,9 @@ def clear_failure(target: Path) -> None:
 def publish_failure(target: Path, record: dict) -> dict:
     """Persist a small failure receipt in the user's worktree.
 
-    Semantic artifacts remain private in the resumable snapshot.  This receipt
-    prevents a missing temporary worktree from erasing the fact that the
-    official pipeline did not complete.
+    Semantic artifacts are retained by the durable source-project checkpoint.
+    This receipt prevents a missing temporary worktree from erasing the fact
+    that the official pipeline did not complete.
     """
     source = _source_for(target)
     phases = record.get("phases", []) if isinstance(record, dict) else []
@@ -306,7 +306,7 @@ def create(target: Path) -> dict:
         _run(target, "worktree", "add", "--detach", "--quiet", str(snapshot), commit)
         _copy_outputs(target, snapshot)
         arkts_dependencies = _hydrate_arkts_dependencies(target, snapshot)
-        data = {"schema_version": 3, "source_project": str(target), "snapshot": str(snapshot), "snapshot_commit": commit, "created_at": state.now(), "arkts_dependencies": arkts_dependencies}
+        data = {"schema_version": 4, "source_project": str(target), "snapshot": str(snapshot), "snapshot_commit": commit, "checkpoint_head": None, "created_at": state.now(), "arkts_dependencies": arkts_dependencies}
         clear_failure(target)
         state.atomic_json(marker_path(target), data)
         state.atomic_json(marker_path(snapshot), data)
@@ -335,7 +335,10 @@ def sync(snapshot: Path) -> dict:
         return {"synced": False, "reason": "active FM-Agent snapshot is unavailable"}
     _run(source, "update-ref", BASELINE_REF, commit)
     marker_path(snapshot).unlink(missing_ok=True)
-    for name in ("fm_agent", "fm_agent_skill"):
+    # Only the complete native FM-Agent result is promoted.  Durable Skill
+    # state already lives under source/fm_agent_skill/checkpoint and must not be
+    # replaced by an execution-cache copy.
+    for name in ("fm_agent",):
         origin, destination = snapshot / name, source / name
         if not origin.exists():
             continue
@@ -363,10 +366,15 @@ def discard(snapshot: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manage FM-Agent Skill private snapshot worktrees.")
-    parser.add_argument("action", choices=("create", "sync", "discard", "show", "ensure-gitignore")); parser.add_argument("--project", required=True)
+    parser.add_argument("action", choices=("create", "sync", "discard", "show", "ensure-gitignore", "rebuild")); parser.add_argument("--project", required=True)
     args = parser.parse_args(); target = project(args)
     try:
-        result = {"create": lambda: create(target), "sync": lambda: sync(target), "discard": lambda: discard(target), "show": lambda: marker(target), "ensure-gitignore": lambda: ensure_gitignore(target)}[args.action](); code = 0
+        if args.action == "rebuild":
+            from checkpoint import rebuild_worktree
+            result = rebuild_worktree(target)
+        else:
+            result = {"create": lambda: create(target), "sync": lambda: sync(target), "discard": lambda: discard(target), "show": lambda: marker(target), "ensure-gitignore": lambda: ensure_gitignore(target)}[args.action]()
+        code = 0
     except RuntimeError as exc:
         result, code = {"ok": False, "error": str(exc)}, 2
     print(json.dumps(result, ensure_ascii=False, indent=2)); raise SystemExit(code)

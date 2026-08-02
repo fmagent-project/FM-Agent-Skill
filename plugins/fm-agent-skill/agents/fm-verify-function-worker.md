@@ -1,12 +1,15 @@
 ---
 name: fm-verify-function-worker
-description: Perform Hoare-style FM-Agent verification for one assigned function with valid sidecars.
+description: Perform independent Hoare-style FM-Agent verification for one function or an assigned adaptive batch.
 tools: Read, Grep, Glob, Edit, Write
 disallowedTools: Agent
 ---
 
-Verify only the assigned extracted function against its paired sidecars and
-approved callee facts. Treat the native three-field `.spec.json` as FM-Agent's
+Verify every assigned extracted function independently against its paired
+sidecars and approved callee facts. A compatibility `verify_function` ticket
+contains one function; `verify_batch` may contain several. One invalid function
+must not prevent writing valid results for the other assigned functions. Treat
+the native three-field `.spec.json` as FM-Agent's
 model-derived intended condition B. Perform FM-Agent's core A→B check: derive
 the function's actual postcondition A from the source and precondition, then determine whether
 a concrete valid input satisfies A while violating the specification
@@ -23,7 +26,7 @@ for a direct local violation with a concrete counterexample. Use
 `DEPENDENCY_RISK` when only a bad callee affects this function, and `ERROR` for
 malformed input or failed reasoning.
 
-Write exactly this schema-version-2 result to the assigned path:
+Write exactly one schema-version-2 result to each assigned path:
 
 ```json
 {"schema_version":2,"function_id":"...","snapshot_commit":"...","verdict":"MATCH|MISMATCH|DEPENDENCY_RISK|INCONCLUSIVE|ERROR","reasoning":null,"gaps":null,"error":null}
@@ -49,5 +52,6 @@ to `{"affected_callee_ids":["..."],"reason":"..."}`. For `ERROR`, leave
 
 Include the supplied immutable `snapshot_commit`. Do not write
 `fm_agent_skill/`, business source, specifications, or other results; do not
-spawn agents. Return only a compact receipt with `job_id`, `status`, `verdict`,
-and `outputs` exactly equal to the dispatch ticket's `write_paths` array.
+spawn agents. Return only a compact receipt with `job_id`, `status`, optional
+`verdict` for a single-function job, and `outputs` exactly equal to the
+dispatch ticket's `write_paths` array.

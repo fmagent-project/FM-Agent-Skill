@@ -63,8 +63,9 @@ confirmation finishes immediately. On resume, call
 `scheduler.py ready`; valid stale outputs finish their job, invalid stale jobs
 requeue in place when attempts remain.
 
-Job files live temporarily at `fm_agent_skill/jobs/<job-id>.json`. They are
-removed after a successful analysis and retained only to resume a failed one.
+SQLite WAL at `fm_agent_skill/checkpoint/state.db` is authoritative. Compact
+job JSON files are Worker-readable mirrors and legacy diagnostics, never the
+ready-query index.
 Concurrent jobs cannot share an output path. After joining a phase, the
 Coordinator runs `scheduler.py phase-receipt --phase <phase>`; it writes the
 small aggregate record at `fm_agent_skill/control/phase_receipts/<phase>.json`.
@@ -81,7 +82,7 @@ failure) before its normal gate.
 | domain context generation | `fm-domain-context-worker` | after valid phases |
 | static edge resolution without CodeGraph | `fm-agent-static-edge-worker` | one bounded candidate, then deterministic validation |
 | specification batch generation | `fm-spec-batch-worker` | same layer batches in parallel |
-| function Hoare reasoner | `fm-verify-function-worker` | one ready function per job; normative and inferred contracts receive A→B, unavailable contracts receive an explicit Worker judgment |
+| function Hoare reasoner | `fm-verify-function-worker` | one compatibility function or adaptive batch; each function writes independent A→B output |
 | Bug Validator | `fm-bug-validate-worker` | one direct `MISMATCH` per job |
 | incremental module selection | `fm-select-relevant-modules-worker` | one job |
 | incremental file selection | `fm-select-relevant-files-worker` | after module selection |
@@ -108,9 +109,8 @@ The corresponding configuration keys are `max_active_subagents`,
 changing them does not invalidate an otherwise valid Git baseline. Parallel Bug
 Validator Workers may read the same snapshot but must use only their own
 attempt-local workspace and caches; they cannot share project-root build
-outputs. Use
-`scheduler.py capacity` to inspect current leases. Phases remain serial;
-independent caller-first-layer work may be parallel, verification may start as
-soon as its sidecars validate, and every phase must join and emit its receipt
-before its gate. The active host supplies the actual subagent call; the Skill
-enforces admission and artifact contracts on both Claude Code and Codex.
+outputs. Use `scheduler.py capacity` to inspect leases. Phases are aggregate
+gates, not dispatch barriers: spec completion unlocks its verify work and a
+schema-valid direct `MISMATCH` unlocks its Bug Validator. Finalization waits
+for DAG convergence. The host supplies subagent calls; the Skill enforces
+artifact contracts on Claude Code and Codex.

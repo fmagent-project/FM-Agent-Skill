@@ -17,7 +17,8 @@ the current host's subagent mechanism; it never performs a worker's semantic
 task inline. Read
 [subagent-scheduler.md](../../references/subagent-scheduler.md) in addition to
 [agent-orchestration.md](../../references/agent-orchestration.md) before
-starting.
+starting. Read [durable-execution.md](../../references/durable-execution.md)
+for checkpoint, automatic continuation, DAG, and terminal authority rules.
 
 Never create or run a Dynamic Workflow, generated JavaScript workflow, or
 another ad-hoc orchestration script for an FM-Agent semantic phase. Such a
@@ -96,7 +97,8 @@ before any ordinary mode selection or CodeGraph action:
 
 If this returns an error, report its reason and do not start a fresh analysis.
 It rejects changed auxiliary inputs, an already completed run, a missing active
-worktree, and legacy runs without a Git snapshot. If the interrupted
+Git ref/checkpoint, and legacy runs without a Git snapshot. A missing temporary
+worktree is rebuilt from the durable checkpoint. If the interrupted
 run's lock has a fresh heartbeat, report that another agent may still be
 working. Ask the user whether to take over; only after an explicit affirmative
 reply may the agent append `--take-over` below.
@@ -126,7 +128,8 @@ when missing or invalid. If an already-completed graph phase is valid, do not
 touch `.codegraph/`. Never silently replace a CodeGraph-selected resumed run
 with `agent-static`.
 
-When `--resume` is absent, use the ordinary workflow below.
+Without `--resume`, ordinary `dispatch` automatically continues a compatible
+checkpoint; no manual flag is required.
 
 If inspection returns `noop`, report a user-visible no-op status and its
 baseline commit, then finish. Do not run `codegraph.py status` or dispatch a
@@ -173,11 +176,10 @@ run lock is held before extraction or graph construction:
 For every non-noop dispatch, replace `$PROJECT` for every subsequent command
 with the `project` path returned by `dispatch`. It is a temporary detached Git
 worktree at a private snapshot commit; the user's original worktree may be
-edited or committed independently. `pipeline.py complete` promotes the
-snapshot to the Git baseline, copies `fm_agent/` and `fm_agent_skill/` back to
-the original project, and removes the temporary worktree. `pipeline.py fail`
-deliberately retains the snapshot for resume. Invoke `--resume` against the
-original project; its marker redirects it to the retained snapshot.
+edited or committed independently. Each gate checkpoints into the original
+project. `pipeline.py complete` alone publishes `fm_agent/`, promotes the Git
+baseline, and removes the temporary worktree. Failure preserves the durable
+checkpoint even when the temporary worktree disappears.
 
 After a CodeGraph rebuild and before extraction, export its normalized function
 and edge data into Skill control state. Supply the same file to both
@@ -189,13 +191,10 @@ and edge data into Skill control state. Supply the same file to both
 ```
 
 Before each phase emit the required `Stage current/total` status, then call
-`pipeline.py phase-start`. Every semantic job manifest must include its current
-pipeline `phase`. For specification and verification, obtain leases only
-through `semantic_executor.py`; do not call `scheduler.py start` or
-`scheduler.py complete` directly. For the remaining named jobs, use
-`scheduler.py admissible`, call `scheduler.py start` immediately before the
-host subagent, and pass its receipt to `scheduler.py complete`. Never launch a
-job merely because it appeared in `ready`.
+`pipeline.py phase-start`. Every job carries its semantic phase, but
+`current_phase` is display state, not a scheduling barrier. Obtain bounded
+leases through `durable_executor.py next`; never launch a job merely because it
+appeared in `ready`, and never let a Worker mutate scheduler state.
 
 Give a worker only its dispatch-ticket inputs and direct evidence. It writes
 full evidence to its assigned output and returns a ≤4 KiB JSON receipt with
@@ -255,12 +254,15 @@ Then create the complete phase queue in one deterministic operation:
   --project "$PROJECT" --phase "$PHASE"
 ```
 
-Use it for full `specification`, full `verification`, incremental
-`verify_affected`, and `bug_validation`. Incremental `update_specs` retains its
-read-only plan/apply/reconcile workflow described below. For specification it registers every
+Use it for full `specification` and incremental `update_specs`; explicit
+verification/Bug Validation planning remains an idempotent legacy/recovery
+entry point. Incremental `update_specs` retains its read-only
+plan/apply/reconcile workflow described below. Specification registers every
 selected function across every project phase and caller-first layer before the
-first Worker starts, splitting by `spec_batch_size` (default eight). For later
-phases it registers every selected function or direct candidate. Do not create
+first Worker starts, splitting by target tokens, function count, source bytes,
+graph complexity, language, and history. It also creates per-spec-dependent
+verification work for streaming; every schema-valid `MISMATCH` later creates
+its Bug Validator dependency. Do not create
 these jobs manually or defer creation of later layers. The resulting
 `fm_agent_skill/control/job_plans/<phase>.json` must cover the entire current
 scope before that phase gate can pass.
@@ -279,11 +281,12 @@ including an `unavailable` contract, must be dispatched to the registered
 FM-Agent reasoner Worker. A zero `worker_jobs_remaining` is valid only when all
 planned artifacts already have current, schema-valid results.
 
-Lease remaining work in a host-sized bounded group:
+Lease ready work across the streaming DAG in a host-sized bounded group:
 
 ```bash
-<python3> "$FM_AGENT_SKILL_ROOT/scripts/semantic_executor.py" dispatch \
-  --project "$PROJECT" --phase "$PHASE" --limit <HOST_SLOTS>
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/durable_executor.py" next \
+  --project "$PROJECT" --limit <HOST_SLOTS> \
+  --turn-budget-remaining <TOKENS>
 ```
 
 Each dispatch names the exact registered Worker, immutable Worker-definition
@@ -298,7 +301,7 @@ workers than returned tickets.
 Replace `<HOST_SLOTS>` with a positive integer no larger than the host's
 currently available native subagent slots or the configured phase cap.
 
-Submit each compact receipt only through:
+Submit semantic receipts only through:
 
 ```bash
 <python3> "$FM_AGENT_SKILL_ROOT/scripts/semantic_executor.py" submit \
@@ -307,10 +310,11 @@ Submit each compact receipt only through:
 
 An invalid artifact or receipt returns `retry_required`; call
 `semantic_executor.py retry --job-id "$JOB_ID"` before obtaining a new ticket.
-Report a timeout or tool failure through `semantic_executor.py fail`. Request
-another dispatch only after every previously leased ticket was submitted or
-failed. Finish with `semantic_executor.py phase-receipt`; `wait_or_finish` is
-not itself proof that the phase gate passed.
+Report a timeout or tool failure through `semantic_executor.py fail`; process
+Bug Validator actions through its executor below. After every completion call
+`durable_executor.py next` immediately to refill the free slot. On
+`checkpoint_and_yield`, stop claiming work and end safely. Finish each phase
+with its scheduler receipt; only DAG convergence plus all gates permits finalization.
 
 For each specification job, follow FM-Agent's intended-behavior process. First
 derive condition B from domain role, public interface, callers, paired APIs,
@@ -349,7 +353,7 @@ artifact), and `interrupted` are retryable. For specification and verification,
 use `semantic_executor.py fail/retry`; for other jobs use `scheduler.py
 fail/retry`. Retain the same job id and stop at configured
 `retries`. For a spec layer with any newly valid sidecar, retry remaining
-batches immediately; wait 10 seconds only when it made no progress. A retried
+batches immediately through completion events. A retried
 spec batch uses the ticket's `repair_artifacts`, `preserve_artifacts`, and
 `validation_message`: preserve valid pairs and repair every invalid pair in one
 pass. Extra fields are removed deterministically; only missing/empty native
@@ -490,7 +494,7 @@ suspicions as discovered bugs. If there are no direct `MISMATCH` results,
 report zero candidates and zero confirmed bugs; external benchmark ground
 truth belongs in a separate evaluator section.
 
-Immediately before any terminal user report, run `diagnose.py --project` on the
-original user worktree and inspect `result_authority`. Report FM-Agent findings
-only when `official_result_available` is true. If it is false, report the run as
-incomplete even if the Coordinator has independently noticed plausible defects.
+Immediately before any terminal user report, run `terminal_report.py --project`
+on the original user worktree. Generate the response only from its structured
+output; never supplement its findings. If `official_result_available` is false,
+report only the incomplete state and reason.

@@ -18,12 +18,19 @@ active workers globally, four specification batches, eight verification workers,
 two Bug Validators, and two read-only incremental plan workers. Configure these
 through `max_active_subagents`, `spec_concurrency`, `verify_concurrency`,
 `bug_validation_concurrency`, and `read_only_plan_concurrency`.
-`spec_batch_size` defaults to `8`; one Specification Worker therefore shares
-the phase/domain context for up to eight functions while still writing one
-independently validated sidecar pair per function. `bug_validation_max_attempts` defaults to
+`worker_target_tokens` (12000), `worker_max_functions` (20), and
+`worker_max_source_bytes` (262144) drive deterministic adaptive spec/verify
+partitioning. `spec_batch_size` is a deprecated explicit compatibility cap.
+`worker_lease_seconds` defaults to 900. `bug_validation_max_attempts` defaults to
 `5` for runtime failures, and `bug_validation_negative_retries` defaults to
 `2` additional completed negative probes. These scheduling and retry
 limits are operational only and are excluded from the analysis fingerprint.
+
+`worker_prompt_change_policy` defaults to `invalidate`: any Worker document
+change blocks automatic resume. `allow_prompt_only` is an explicit future-facing
+exception that may ignore a changed `worker_prompt_hash` only when the sealed
+`worker_execution_hash` remains identical. Existing Workers have no delimited
+prompt-only region, so any document change currently changes both hashes.
 
 `bug_validation_execution` defaults to `agent-executed`. In that FM-Agent
 compatibility mode, the active Codex/Claude Bug Validator Worker executes the
@@ -48,11 +55,11 @@ run for a Bug Validator attempt writes its own immutable
 `fm_agent_skill/probes/<bug-id>/attempt_<n>/build_profile.json` instead, so
 parallel attempts never share mutable build evidence.
 
-Every analysis creates one detached Git worktree from a private snapshot
+Every analysis creates a disposable detached Git worktree from a private snapshot
 commit. The snapshot captures tracked and non-ignored working-tree changes
 without moving the user's branch, index, or `HEAD`. The Coordinator must use
 the returned snapshot path until terminal completion. On `pipeline.py complete`,
-the Skill promotes that commit to `refs/fm-agent-skill/baseline`, copies its
-generated `fm_agent/` and `fm_agent_skill/` back to the source project, and
-removes the worktree. A failed or interrupted analysis retains one snapshot for
-`--resume`; it does not accumulate per-run history.
+the Skill promotes that commit to `refs/fm-agent-skill/baseline`, publishes only
+the complete generated `fm_agent/`, and removes the worktree. Every gate already
+persisted state under source `fm_agent_skill/checkpoint/`, so failure and resume
+do not depend on retaining the temporary directory.

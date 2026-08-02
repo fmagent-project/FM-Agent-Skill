@@ -13,7 +13,7 @@ The Skill runs every analysis in a detached Git worktree and does not modify
 business source code. It captures uncommitted non-ignored changes as a private
 local snapshot commit without moving the user's branch, index, or `HEAD`.
 The current release supports full analysis, Git-based incremental analysis,
-no-op detection, and explicit safe resume of interrupted analyses.
+no-op detection, persistent checkpoints, and automatic safe continuation.
 
 ## Features
 
@@ -37,15 +37,14 @@ no-op detection, and explicit safe resume of interrupted analyses.
   differs from a valid baseline commit.
 - Let users continue editing and committing the original worktree while the
   Skill analyzes its stable snapshot worktree.
-- Continue the single interrupted full or incremental analysis from its first
-  incomplete phase without repeating completed work.
+- Rebuild a lost `/tmp` worktree from the active Git ref and persistent
+  content-addressed checkpoint without repeating completed specs.
 - Use CodeGraph automatically for an exact call graph when it is available, or
   record an `agent-static` best-effort fallback when it is unavailable.
 - Run same-layer semantic workers concurrently with explicit write ownership,
   persisted job state, same-job bounded retries, and phase gates.
-- Materialize the complete specification/verification/Bug Validator queue
-  before workers run, so an early batch failure cannot erase later work from
-  the scheduler's scope.
+- Stream a SQLite-backed dependency DAG from specification through per-function
+  verification and dynamic Bug Validation with atomic leases and receipts.
 
 ## Prerequisites
 
@@ -108,21 +107,21 @@ Skill selects it from its Git baseline commit and the current snapshot commit.
 
 ## Host worker scheduler
 
-The Coordinator is the only writer of `fm_agent_skill/` state. It maps phase
+The Coordinator is the only SQLite/control-state writer. It maps phase
 planning, domain context, specification batches, function verification, Bug
 Validator, incremental selection, update planning, and caller reconciliation
-to named host subagents. It runs phases serially, dispatches independent
-same-layer jobs with an enforced global maximum of `10` workers (specification
-`4`, verification `8`, Bug Validator `2`, read-only planning `2`), and joins
-them before each gate. The Coordinator receives compact worker receipts and
+to named host subagents. It streams ready DAG jobs with an enforced global
+maximum of `10` workers (specification
+`4`, verification `8`, Bug Validator `2`, read-only planning `2`) and evaluates
+each phase gate after its jobs converge. The Coordinator receives compact worker receipts and
 uses a phase receipt to inspect only escalations. Read
 [the scheduler contract](plugins/fm-agent-skill/references/subagent-scheduler.md)
 for the worker mapping and recovery rules.
 
 ### Failure, retry, and recovery
 
-Each semantic unit has one durable job id at
-`fm_agent_skill/jobs/<job-id>.json`. A timeout, rate limit,
+Each semantic unit has one durable job id in
+`fm_agent_skill/checkpoint/state.db`; JSON is a Worker-readable mirror. A timeout, rate limit,
 Agent-tool failure, missing output, or invalid output becomes `retryable`; the
 Coordinator requeues the **same job** until its configured attempt limit is
 reached (five total attempts by default). It never creates a replacement job
@@ -197,15 +196,16 @@ probes; `active.json` is overwritten by the next analysis. The long-lived
 source baseline is `refs/fm-agent-skill/baseline`; `baseline.json` retains only
 run configuration and completion provenance.
 
-To continue a stopped analysis, make an explicit request instead of selecting a
-mode manually:
+An ordinary run automatically continues a compatible stopped analysis; an
+explicit request is also supported:
 
 ```text
 Continue the interrupted FM-Agent analysis.
 ```
 
-Resume requires the retained Git snapshot worktree and unchanged saved analysis
-inputs. It validates completed stages and starts at the first incomplete one.
+Resume requires the active Git ref, complete checkpoint, and unchanged saved
+inputs. It rebuilds a missing worktree, validates hashes, and starts at the
+first incomplete task.
 It also reconciles per-worker job state before dispatching new work. Changes in
 the original worktree do not alter the retained snapshot.
 
@@ -319,12 +319,12 @@ analysis state and reports, not business source.
   source or the current phase definition.
 - An incremental run preserves unaffected specifications and revalidates direct
   violations instead of reusing bug-validation conclusions from an old run.
-- Resume is explicit and validates the retained Git snapshot and analysis
-  configuration. A fresh lock heartbeat is treated as a potentially active
+- Resume is automatic when identities match and validates the Git snapshot,
+  checkpoint, plugin/Worker versions, and configuration. A fresh lease is a potentially active
   analysis; lock takeover requires an explicit user confirmation.
-- Every non-noop analysis runs in one temporary detached Git worktree. It
-  copies only `fm_agent/` and `fm_agent_skill/` back on successful completion;
-  a failed or stopped analysis keeps that snapshot until resume.
+- Every non-noop analysis runs in a disposable detached Git worktree. The source
+  checkpoint updates after every gate; only complete `fm_agent/` is published
+  on success. A failed/stopped run does not depend on retaining `/tmp`.
 
 ## Verified workflow
 
@@ -361,10 +361,10 @@ Licensed under the [Apache License 2.0](LICENSE).
 
 # 中文说明
 
-FM-Agent Skill 是面向 Claude Code 的代码正确性分析 Skill。它借鉴
+FM-Agent Skill 是面向 Claude Code 与 Codex 的代码正确性分析 Skill。它借鉴
 [FM-Agent](https://github.com/fmagent-project/FM-Agent) 的分阶段分析思路：Coordinator
 负责基线、锁、状态、调用图和调度，Claude subagent 负责与原 FM-Agent LLM worker 一一对应的
-语义工作。Codex executor 仍在后续规划中，当前版本不应在 Codex 中宣称已完成语义分析。
+语义工作，并由本地确定性脚本管理 checkpoint、DAG 与结果权限；脚本不调用模型 API。
 
 它在 Git 工作区中运行，不修改业务源码。当前支持完整分析、自动增量分析、no-op，以及安全地续跑中断分析。
 
@@ -393,7 +393,7 @@ claude plugin install fm-agent-skill@fm-agent-skill
 继续执行刚才中断的 FM-Agent 分析。
 ```
 
-resume 会从当前分析的第一个未完成阶段继续；它始终使用保留的 Git snapshot worktree，不受原工作区后续源码修改影响。
+普通 run 会自动续跑兼容的中断分析；临时 worktree 丢失时会由 active Git ref 与持久化 checkpoint 重建，不受原工作区后续源码修改影响。
 
 full、incremental 和 resume 都会在每个阶段前显示“当前阶段/总阶段数”；resume 会先显示恢复位置，no-op 会明确说明没有执行分析阶段。
 
@@ -401,9 +401,9 @@ full、incremental 和 resume 都会在每个阶段前显示“当前阶段/总�
 
 ## Claude worker 调度、失败与恢复
 
-Coordinator 是 `fm_agent_skill/` 的唯一写入者。它按阶段串行推进，在同一调用层内最多并发
+Coordinator 是 SQLite 与控制状态的唯一写入者。它按 durable DAG 流式推进，最多并发
 全局最多运行 10 个独立 worker（规格 4、验证 8、Bug Validator 2、只读增量计划 2）；调度器在启动前强制占用名额，join 后写入阶段回执并通过 gate 才能进入下一阶段。
-每个语义单元有固定 job id，保存在 `fm_agent_skill/jobs/<job-id>.json`。
+每个语义单元有固定 job id，权威状态保存在 `fm_agent_skill/checkpoint/state.db`，JSON 仅供 Worker 读取和旧状态诊断。
 
 超时、限流、Agent 工具失败、缺失产物或无效产物会成为 `retryable`。Coordinator 会在**同一个
 job** 上有界重试，默认总尝试次数为 5，不创建替代 job，也不修改下游依赖。phase plan 和
