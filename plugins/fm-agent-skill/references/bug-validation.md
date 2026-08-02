@@ -125,6 +125,12 @@ project and private scratch, but recognizes fewer ecosystems.
 
 ## Host-coordinated state machine
 
+The Coordinator must not end its turn after launching a partial batch. Every
+non-terminal action (`host_worker`, `wait_for_completion_event`, retry, or
+execution receipt) requires another executor call. If the Coordinator reaches
+its context or time limit, it must preserve the durable run and continue from
+`next`/`resume`; a partial Bug Validator batch is never a completed phase.
+
 The dynamic lifecycle is driven by `bug_validation_executor.py`, not a manual
 sequence of ad-hoc runner calls. It never invokes an Agent itself. Instead it
 returns an exact `host_worker` request for the active Codex/Claude Coordinator

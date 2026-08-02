@@ -470,6 +470,28 @@ cache, never a project-root build output. `build_result.json` can never confirm 
 
 ## Non-skippable Bug Validation loop
 
+### Coordinator non-termination guard
+
+The Coordinator must treat every non-terminal executor response as a
+continuation request, not as a reason to summarize. In particular:
+
+- `host_worker`, `wait_for_completion_event`, `scheduler_retry`, and
+  `submit_agent_execution` are **not** terminal responses;
+- a background-worker batch is not a phase boundary;
+- a report file, a confirmed subset, or a static `inconclusive` explanation is
+  not evidence that a job finished;
+- never stop because the analysis is taking a long time or because one batch
+  has completed.
+
+After each response, persist the compact job id/attempt receipt, immediately
+call the executor again, and continue until it returns `dag_converged` or an
+explicit exhausted-job failure. If the host is approaching a context or
+execution limit, do not summarize: leave the durable state intact and return
+the exact continuation action (`next`/`resume`) so the next Coordinator turn
+can continue the same run. A Coordinator turn ending while any Bug Validator
+job is `queued`, `running`, or `retryable` is an interrupted run, never a
+successful phase.
+
 After Stage 8 starts, remain in this loop until it reaches one of the two
 machine-observable terminal states below. Launching a bounded group of
 background Workers is only one iteration; it is never phase completion.

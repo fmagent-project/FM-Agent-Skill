@@ -256,7 +256,19 @@ def all_phase_jobs_succeeded(target: Path, phase: str) -> bool:
 def submit_finalization(target: Path, job_id: str, receipt: dict) -> dict:
     job = load_job(target, job_id); _, mode = context(job)
     if not finalization_matches_current_attempt(target, job):
-        raise ValueError("finalization report does not append evidence for the current Bug Validator attempt")
+        # Do not leave a leased job running when a Worker wrote a static
+        # report without the required immutable dynamic evidence.  Treat this
+        # as an execution/protocol failure and requeue through the normal
+        # bounded retry path; a report path alone is never a completion.
+        failed = scheduler.transition(
+            target, job_id, "fail", None,
+            "no dynamic reproduction available",
+            "execution",
+        )
+        if failed.get("status") == "retryable":
+            scheduler.transition(target, job_id, "retry", None, None, "execution")
+            return next_action(target, job_id)
+        return {"action": "terminal", "job_id": job_id, "status": failed.get("status"), "reason": failed.get("message")}
     completed = scheduler.transition(target, job_id, "complete", receipt, None, "execution")
     if completed.get("status") == "retryable":
         scheduler.transition(target, job_id, "retry", None, None, "execution")

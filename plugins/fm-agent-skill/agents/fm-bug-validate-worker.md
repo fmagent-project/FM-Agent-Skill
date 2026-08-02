@@ -150,6 +150,13 @@ finalization for a retry.
 {"reproduction_result":"fm_agent_skill/probes/<bug-id>/attempt_<n>/reproduction_result.json"}
 ```
 
+If `reproduction_result.json` does not exist or is not valid, do **not** write
+the Bug Validator result report and do not claim `inconclusive` from static
+reasoning alone. Return an execution-failure receipt so the Coordinator can
+requeue the same attempt under the runtime retry budget. `inconclusive` is
+valid only when the execution pass produced a recorded `unsupported` result
+with the exact attempt identity and evidence path.
+
 Use only the recorded execution classification:
 
 - `confirmed`: execution completed and observed the contradictory behavior; set

@@ -112,5 +112,8 @@ attempt-local workspace and caches; they cannot share project-root build
 outputs. Use `scheduler.py capacity` to inspect leases. Phases are aggregate
 gates, not dispatch barriers: spec completion unlocks its verify work and a
 schema-valid direct `MISMATCH` unlocks its Bug Validator. Finalization waits
-for DAG convergence. The host supplies subagent calls; the Skill enforces
-artifact contracts on Claude Code and Codex.
+for DAG convergence. Within a capacity window, admission is deterministic and
+fair: ready jobs are selected in ascending job-id order, and later jobs are
+admitted on the next call after earlier jobs finish or release capacity. The
+host supplies subagent calls; the Skill enforces artifact contracts on Claude
+Code and Codex.

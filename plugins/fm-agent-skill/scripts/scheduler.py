@@ -754,6 +754,17 @@ def transition(target, job_id, action, result, message, failure_class, attempt=N
             _record_receipt(target, job, result)
     elif action == "fail":
         if job["status"] not in {"queued", "running"}: raise ValueError("only queued or running jobs can fail")
+        # A Bug Validator that reaches finalization without an immutable
+        # reproduction result has not produced a semantic input error.  It is
+        # an execution/protocol failure and must consume the bounded runtime
+        # retry budget instead of prematurely failing the whole phase.
+        if (
+            job.get("type") == "bug_validate"
+            and not job.get("legacy_contract")
+            and failure_class == "input"
+            and "dynamic reproduction" in str(message or "").lower()
+        ):
+            failure_class = "execution"
         _fail(job, failure_class, message)
     else:
         if job["status"] != "retryable": raise ValueError("only a retryable job can be requeued")
