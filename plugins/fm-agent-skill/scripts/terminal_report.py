@@ -8,12 +8,25 @@ from pathlib import Path
 
 from _common import project, state
 import checkpoint
+from isolation import marker
 
 
 def _phase_manifests(target: Path) -> list[dict]:
     phases = checkpoint.root(target) / "phases"
     values = [state.read_json(path, {}) for path in sorted(phases.glob("*.json"))] if phases.is_dir() else []
-    return [value for value in values if isinstance(value, dict) and value.get("schema_version") == 1]
+    return [
+        value for value in values
+        if isinstance(value, dict) and value.get("schema_version") == checkpoint.CHECKPOINT_SCHEMA_VERSION
+    ]
+
+
+def _analysis_target(target: Path) -> Path:
+    """Read live artifacts from the isolated snapshot when it still exists."""
+    data = marker(target)
+    snapshot = data.get("snapshot") if isinstance(data, dict) else None
+    if isinstance(snapshot, str) and Path(snapshot).is_dir():
+        return Path(snapshot).resolve()
+    return target
 
 
 def _verification_results(target: Path, snapshot_commit: str) -> list[dict]:
@@ -46,8 +59,23 @@ def _verification_results(target: Path, snapshot_commit: str) -> list[dict]:
 
 def _bug_results(target: Path, snapshot_commit: str, candidates: set[str]) -> list[dict]:
     root = state.fm_dir(target) / "bug_validation"
+    try:
+        import scheduler
+        jobs = {
+            job.get("bug_result_path"): job
+            for job in scheduler.jobs_for_phase(target, "bug_validation")
+            if job.get("type") == "bug_validate" and not job.get("legacy_contract")
+        }
+    except (OSError, RuntimeError, ValueError):
+        jobs = {}
     results = []
     for path in sorted(root.glob("*.result.json")) if root.is_dir() else []:
+        relative = path.relative_to(target).as_posix()
+        job = jobs.get(relative)
+        # A file is not an accepted Bug Validator result until the durable
+        # scheduler accepted its receipt for this job.
+        if jobs and (not isinstance(job, dict) or job.get("status") != "succeeded"):
+            continue
         payload = state.read_json(path, None)
         if not isinstance(payload, dict) or payload.get("snapshot_commit") != snapshot_commit:
             continue
@@ -112,6 +140,7 @@ def official_result_available(target: Path) -> tuple[bool, str | None]:
 
 
 def build(target: Path) -> dict:
+    target = _analysis_target(target)
     checked = checkpoint.validate(target)
     manifests = _phase_manifests(target)
     scheduler = _scheduler_aggregate(target)
@@ -125,6 +154,11 @@ def build(target: Path) -> dict:
     rejected = [item for item in bug_results if item["status"] == "rejected"]
     inconclusive = [item for item in bug_results if item["status"] == "inconclusive"]
     official, reason = official_result_available(target)
+    # Never report partial dynamic evidence as confirmed bugs. It remains in
+    # the durable attempt artifacts for a later accepted completion.
+    report_confirmed = confirmed if official else []
+    report_rejected = rejected if official else []
+    report_inconclusive = inconclusive if official else []
     report = {
         "schema_version": 1,
         "official_result_available": official,
@@ -142,9 +176,12 @@ def build(target: Path) -> dict:
         "counts": {
             "verification_results": len(verification),
             "candidates": len(mismatches),
-            "confirmed": len(confirmed),
-            "rejected": len(rejected),
-            "inconclusive": len(inconclusive) + len(mismatches - {item["function_id"] for item in bug_results}),
+            "confirmed": len(report_confirmed),
+            "rejected": len(report_rejected),
+            "inconclusive": (
+                len(report_inconclusive) + len(mismatches - {item["function_id"] for item in bug_results})
+                if official else len(mismatches)
+            ),
         },
         "authority_rules": {
             "candidate_requires_schema_valid_mismatch": True,
@@ -159,9 +196,9 @@ def build(target: Path) -> dict:
     if official:
         report["findings"] = {
             "candidates": sorted(mismatches),
-            "confirmed": confirmed,
-            "rejected": rejected,
-            "inconclusive": inconclusive,
+            "confirmed": report_confirmed,
+            "rejected": report_rejected,
+            "inconclusive": report_inconclusive,
         }
     return report
 

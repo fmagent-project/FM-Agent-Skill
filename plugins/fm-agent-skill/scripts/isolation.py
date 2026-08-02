@@ -82,6 +82,51 @@ def publish_failure(target: Path, record: dict) -> dict:
     return receipt
 
 
+def publish_progress(snapshot: Path, manifest: dict, record: dict) -> dict:
+    """Atomically mirror a sealed in-progress ``fm_agent`` tree to source.
+
+    This is presentation-only: the checkpoint object store and sealed manifest
+    remain the recovery authority. It lets users inspect completed phases
+    without mistaking partial artifacts for an official result.
+    """
+    data = marker(snapshot)
+    source_value = data.get("source_project") if isinstance(data, dict) else None
+    if not isinstance(source_value, str):
+        return {"published": False, "reason": "no isolated source project"}
+    source = Path(source_value).resolve()
+    snapshot = snapshot.resolve()
+    if not source.is_dir() or source == snapshot:
+        return {"published": False, "reason": "no separate source worktree"}
+    origin = snapshot / "fm_agent"
+    if not origin.is_dir():
+        return {"published": False, "reason": "snapshot has no fm_agent artifacts"}
+    destination = source / "fm_agent"
+    temporary = source / f".fm_agent.progress.{os.getpid()}.tmp"
+    previous = source / f".fm_agent.progress.previous.{os.getpid()}"
+    shutil.rmtree(temporary, ignore_errors=True)
+    shutil.rmtree(previous, ignore_errors=True)
+    shutil.copytree(origin, temporary, symlinks=True)
+    state.atomic_json(temporary / "analysis_status.json", {
+        "schema_version": 1,
+        "status": "in_progress" if record.get("status") == "running" else record.get("status"),
+        "official_result_available": False,
+        "current_phase": record.get("current_phase"),
+        "last_checkpoint_phase": manifest.get("phase"),
+        "checkpoint_id": manifest.get("checkpoint_id"),
+        "snapshot_commit": manifest.get("snapshot_commit"),
+        "updated_at": state.now(),
+    })
+    if destination.exists():
+        os.replace(destination, previous)
+    os.replace(temporary, destination)
+    shutil.rmtree(previous, ignore_errors=True)
+    return {
+        "published": True,
+        "path": str(destination),
+        "checkpoint_id": manifest.get("checkpoint_id"),
+    }
+
+
 def _run(target: Path, *args: str, env: dict | None = None) -> str:
     completed = subprocess.run(["git", "-C", str(target), *args], text=True, capture_output=True, env=env, check=False)
     if completed.returncode:

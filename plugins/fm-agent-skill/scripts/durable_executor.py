@@ -30,13 +30,12 @@ def earliest_incomplete(target: Path) -> str:
 
 def next_actions(target: Path, limit: int, offset: int = 0, turn_budget_remaining: int | None = None) -> dict:
     if limit < 1: raise ValueError("dispatch limit must be positive")
-    if turn_budget_remaining is not None and turn_budget_remaining < 2000:
-        phase = earliest_incomplete(target)
-        manifest = checkpoint.commit(target, phase, "running", active_record=state.active_record(target))
-        return {
-            "action": "checkpoint_and_yield", "dispatches": [],
-            "checkpoint_id": manifest["checkpoint_id"], "earliest_incomplete_phase": phase,
-        }
+    # A durable checkpoint is an implementation detail, not a terminal
+    # scheduler action. This script cannot start host subagents itself, so a
+    # `checkpoint_and_yield` response used to make the Coordinator stop even
+    # though ready work remained. Keep the argument for CLI compatibility,
+    # but never convert an ordinary low-context signal into a halted run.
+    _ = turn_budget_remaining
     admitted = scheduler.admissible(target)["jobs"]
     selected = admitted[offset:offset + limit]
     actions = []

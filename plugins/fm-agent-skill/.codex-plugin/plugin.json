@@ -1,6 +1,6 @@
 {
   "name": "fm-agent-skill",
-  "version": "0.1.0+codex.20260802045916",
+  "version": "0.1.0+codex.20260802071746",
   "description": "Skill-guided FM-Agent correctness-analysis workflow for Codex.",
   "author": {
     "name": "FM-Agent"

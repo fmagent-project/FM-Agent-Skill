@@ -14,12 +14,14 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import sqlite3
 import subprocess
 import tempfile
 from typing import Iterable
 
 from _common import project, state
+from config import load
 
 
 CHECKPOINT_SCHEMA_VERSION = 2
@@ -508,7 +510,18 @@ def commit(
     if previous_current.exists():
         shutil.rmtree(previous_current)
     connection.close()
-    return manifest
+    # Expose a current, explicitly non-official mirror in the source project
+    # after every sealed checkpoint. The checkpoint object store and manifest
+    # remain authoritative; a presentation-copy failure cannot undo a valid
+    # checkpoint.
+    try:
+        from isolation import publish_progress
+        progress = publish_progress(target, manifest, record)
+    except (OSError, RuntimeError, ValueError) as exc:
+        progress = {"published": False, "reason": str(exc)}
+    result = dict(manifest)
+    result["progress_mirror"] = progress
+    return result
 
 
 def _next_phase(record: dict, phase: str) -> str | None:
@@ -785,16 +798,49 @@ def _coordinator_lease_active(target: Path) -> bool:
     if not path.is_file():
         return False
     connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
     try:
         row = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='coordinator_leases'"
         ).fetchone()
         if not row:
             return False
-        return connection.execute(
-            "SELECT 1 FROM coordinator_leases WHERE lease_id='active' "
-            "AND expires_at > ? LIMIT 1", (state.now(),)
-        ).fetchone() is not None
+        row = connection.execute(
+            "SELECT owner, heartbeat_at, expires_at FROM coordinator_leases "
+            "WHERE lease_id='active' LIMIT 1"
+        ).fetchone()
+        if row is None or row["expires_at"] <= state.now():
+            return False
+        # A coordinator that ran on this machine and whose process no longer
+        # exists cannot own the analysis, even if an old broad lock TTL has
+        # not elapsed yet.
+        owner = row["owner"]
+        if isinstance(owner, str) and ":" in owner:
+            host, value = owner.rsplit(":", 1)
+            try:
+                pid = int(value)
+                if host == socket.gethostname():
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        return False
+                    except PermissionError:
+                        # A live process owned by another local account must
+                        # retain its lease; only a proven missing PID is stale.
+                        pass
+            except ValueError:
+                pass
+        try:
+            config = load(target)
+            grace = max(
+                int(config.get("resume_grace_seconds", 600)),
+                int(config.get("worker_lease_seconds", 900)),
+            )
+            heartbeat = state.dt.datetime.fromisoformat(row["heartbeat_at"])
+            age = (state.dt.datetime.now(state.dt.timezone.utc) - heartbeat).total_seconds()
+            return age <= grace
+        except (TypeError, ValueError):
+            return False
     finally:
         connection.close()
 

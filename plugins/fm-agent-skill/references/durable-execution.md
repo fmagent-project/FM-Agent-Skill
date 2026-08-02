@@ -8,8 +8,8 @@ execution cache. The source project owns the authoritative state at
 `objects/` is the SHA-256 object store, `current/fm_agent/` is the complete
 current FM-Agent mirror, and `current/recovery/` contains only `active.json`,
 `config.json`, `jobs/`, `control/`, and `probes/`. Never copy the checkpoint
-directory into itself. Never publish source-project `fm_agent/` before every
-gate and the complete DAG succeed.
+directory into itself. A source-project `fm_agent/` mirror is published only
+from a sealed checkpoint and is always explicitly non-official until finalize.
 
 Every gated transition calls `checkpoint.py`. A successful phase has one
 schema-version-2 manifest below `checkpoint/phases/` containing its ordinal,
@@ -30,6 +30,11 @@ each checkpoint performs controlled `wal_checkpoint(FULL)` plus fsync of the
 main database/WAL after each checkpoint transaction and before success is
 accepted. The database is the durable ledger itself, never an untracked copy
 inside `current/`.
+
+After each sealed checkpoint, atomically publish a presentation mirror at the
+source project's `fm_agent/analysis_status.json`. It is explicitly marked
+`in_progress` and `official_result_available=false`; it is useful for
+inspection but never an authority for findings or baseline promotion.
 
 `current/` uses `copy2`, not hard links: a replaceable mirror sharing an inode
 with an object could corrupt the supposedly immutable object store.
@@ -66,8 +71,10 @@ terminate `input`, `semantic`, and `cancelled`.
 
 Use `durable_executor.py next` to request no more than the available bounded
 slots. Submit each completion immediately and request another action to fill
-the free slot. Do not wait for a large batch or sleep. Stop claiming near the
-turn budget and call `durable_executor.py checkpoint`. `current_phase` is only
+the free slot. Do not wait for a large batch or sleep. A checkpoint is never a
+normal terminal action: keep claiming ready work until the DAG converges. If a
+host-enforced hand-off is unavoidable, checkpoint first; the next ordinary
+dispatch automatically takes over the compatible durable state. `current_phase` is only
 the earliest-incomplete display value; job dependencies decide readiness.
 Specification retains caller-first dependencies, each verify job depends on
 its own spec job, and Bug Validation is created only for a schema-valid direct
@@ -80,8 +87,8 @@ partially invalid batch and retry only invalid functions.
 
 ## Host boundary
 
-The Skill persists safely across turns and the next run continues
-automatically. If the host terminates the whole Codex/Claude session, the Skill
+The Skill persists safely across turns and the next ordinary run continues
+automatically without requiring `--resume`. If the host terminates the whole Codex/Claude session, the Skill
 cannot create another session by itself. Truly unattended cross-session
 continuation requires a Codex/Claude plugin continuation hook.
 

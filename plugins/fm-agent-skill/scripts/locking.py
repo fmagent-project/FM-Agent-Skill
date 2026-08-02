@@ -19,6 +19,37 @@ def status_path(target): return state.skill_dir(target) / "active.json"
 def read_lock(target): return state.read_json(lock_path(target), {})
 
 
+def _local_owner_alive(host, pid) -> bool | None:
+    """Return local process liveness, or ``None`` for another host/unknown."""
+    if host != socket.gethostname() or not isinstance(pid, int) or pid < 1:
+        return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def owner_alive(record) -> bool | None:
+    if not isinstance(record, dict):
+        return None
+    return _local_owner_alive(record.get("host"), record.get("pid"))
+
+
+def coordinator_lease_seconds(target) -> int:
+    """Keep the coordinator claim short; workers retain their own leases."""
+    config = load(target)
+    return min(
+        int(config.get("lock_ttl_seconds", 7200)),
+        max(
+            int(config.get("resume_grace_seconds", 600)),
+            int(config.get("worker_lease_seconds", 900)),
+        ),
+    )
+
+
 def _coordinator_lease(target, action):
     path = checkpoint.db_path(target); path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
@@ -26,7 +57,7 @@ def _coordinator_lease(target, action):
     if action == "release":
         connection.execute("DELETE FROM coordinator_leases WHERE lease_id='active'")
     else:
-        ttl = load(target).get("lock_ttl_seconds", 7200)
+        ttl = coordinator_lease_seconds(target)
         expires = (state.dt.datetime.now(state.dt.timezone.utc) + state.dt.timedelta(seconds=ttl)).replace(microsecond=0).isoformat()
         connection.execute("INSERT OR REPLACE INTO coordinator_leases VALUES('active',?,?,?)", (f"{socket.gethostname()}:{os.getpid()}", state.now(), expires))
     connection.commit(); connection.close()
@@ -71,7 +102,9 @@ def reclaim_for_resume(target, take_over=False):
     existing = read_lock(target)
     if not existing: return acquire(target)
     grace = load(target).get("resume_grace_seconds", 600)
-    if not take_over and age_seconds(existing) < grace:
+    # A stale local PID is decisive. Do not make the user wait for the grace
+    # period or type --take-over after the Coordinator process died.
+    if not take_over and age_seconds(existing) < grace and owner_alive(existing) is not False:
         raise RuntimeError("interrupted analysis still has a fresh heartbeat; wait or explicitly confirm lock takeover")
     lock_path(target).unlink(missing_ok=True); return acquire(target)
 

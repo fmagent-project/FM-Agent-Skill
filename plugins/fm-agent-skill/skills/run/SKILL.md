@@ -285,8 +285,7 @@ Lease ready work across the streaming DAG in a host-sized bounded group:
 
 ```bash
 <python3> "$FM_AGENT_SKILL_ROOT/scripts/durable_executor.py" next \
-  --project "$PROJECT" --limit <HOST_SLOTS> \
-  --turn-budget-remaining <TOKENS>
+  --project "$PROJECT" --limit <HOST_SLOTS>
 ```
 
 Each dispatch names the exact registered Worker, immutable Worker-definition
@@ -312,9 +311,14 @@ An invalid artifact or receipt returns `retry_required`; call
 `semantic_executor.py retry --job-id "$JOB_ID"` before obtaining a new ticket.
 Report a timeout or tool failure through `semantic_executor.py fail`; process
 Bug Validator actions through its executor below. After every completion call
-`durable_executor.py next` immediately to refill the free slot. On
-`checkpoint_and_yield`, stop claiming work and end safely. Finish each phase
-with its scheduler receipt; only DAG convergence plus all gates permits finalization.
+`durable_executor.py next` immediately to refill the free slot. A checkpoint
+is only a durable write; it is never a normal reason to end an analysis.
+Continue the loop until the DAG converges, then finish each phase with its
+scheduler receipt; only DAG convergence plus all gates permits finalization.
+Never end because a phase is large, a queue is nonempty, a Worker is slow, or
+the Coordinator estimates low context. If the host itself forces a hand-off,
+the next ordinary Skill invocation automatically reclaims the compatible
+checkpoint; do not ask the user to supply `--resume`.
 
 For each specification job, follow FM-Agent's intended-behavior process. First
 derive condition B from domain role, public interface, callers, paired APIs,
@@ -483,7 +487,8 @@ test execution, or an alternative report in the same run. Such observations
 would not have passed specification, verification, and Bug Validator gates and
 must never be presented as FM-Agent findings. The final response for a failed
 run contains only the completed phase, failed phase, exact scheduler/gate
-reason, retained resume location, and `--resume` instruction.
+reason, and retained automatic-continuation location. `--resume` is optional
+diagnostic syntax, not a required user recovery step.
 
 Build the final user report only from validated current-run artifacts. A
 function may appear under confirmed bugs only when its direct `MISMATCH` has a
