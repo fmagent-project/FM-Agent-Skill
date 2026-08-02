@@ -46,14 +46,20 @@ def apply_plan(target: Path, plan_path: Path) -> dict:
     plan = state.read_json(plan_path, {})
     updates = plan.get("sidecar_updates") if isinstance(plan, dict) else None
     if not isinstance(updates, dict): raise ValueError("plan must contain sidecar_updates object")
-    root = (state.fm_dir(target) / "extracted_functions").resolve(); applied = []
+    root = (state.fm_dir(target) / "extracted_functions").resolve(); prepared = []
     for rel, update in updates.items():
         if not isinstance(rel, str) or not isinstance(update, dict): raise ValueError("invalid sidecar update")
         artifact = (root / rel).resolve()
         if root not in artifact.parents or not artifact.is_file(): raise ValueError(f"plan references missing extracted artifact: {rel}")
-        spec, info = update.get("spec"), update.get("info")
-        if not isinstance(spec, dict) or not isinstance(info, dict): raise ValueError(f"plan update requires spec and info objects: {rel}")
-        state.atomic_json(Path(f"{artifact}.spec.json"), spec); state.atomic_json(Path(f"{artifact}.info.json"), info); applied.append(rel)
+        spec, info = state.canonical_spec(update.get("spec"))[0], state.canonical_info(update.get("info"))[0]
+        if spec is None or info is None:
+            raise ValueError(f"plan update does not convert to FM-Agent's native spec/info schema: {rel}")
+        prepared.append((rel, artifact, spec, info))
+    applied = []
+    for rel, artifact, spec, info in prepared:
+        state.atomic_json(Path(f"{artifact}.spec.json"), spec)
+        state.atomic_json(Path(f"{artifact}.info.json"), info)
+        applied.append(rel)
     report = state.fm_dir(target) / "incremental_updated_specs.json"
     prior = state.read_json(report, {}); artifacts = set(prior.get("artifacts", [])) if isinstance(prior, dict) else set()
     artifacts.update(applied)

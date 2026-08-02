@@ -145,6 +145,9 @@ def _read_paths(target: Path, job: dict) -> list[str]:
             source = _source_for_artifact(target, artifact)
             if source:
                 paths.add(source)
+        # Retry workers must be able to inspect their own existing pairs so a
+        # valid artifact is preserved and only a rejected pair is rewritten.
+        paths.update(path for path in job.get("required_outputs", []) if (target / path).exists())
         for candidate in (state.fm_dir(target) / "spec_prompts").glob("phase_*_topdown_layers.json"):
             payload = state.read_json(candidate, {})
             encoded = json.dumps(payload, ensure_ascii=False)
@@ -180,6 +183,16 @@ def _read_paths(target: Path, job: dict) -> list[str]:
     return sorted(path for path in paths if (target / path).exists())
 
 
+def _spec_repair_scope(target: Path, job: dict) -> tuple[list[str], list[str]]:
+    if job.get("type") != "spec_batch":
+        return [], []
+    repair, preserve = [], []
+    for artifact in job.get("artifacts", []):
+        ready, _ = state.sidecars_ready(state.fm_dir(target) / "extracted_functions" / artifact)
+        (preserve if ready else repair).append(artifact)
+    return sorted(repair), sorted(preserve)
+
+
 def _ticket(target: Path, job: dict) -> dict:
     worker = WORKERS.get(job.get("type"))
     if worker is None:
@@ -187,8 +200,9 @@ def _ticket(target: Path, job: dict) -> dict:
     definition = Path(__file__).resolve().parents[1] / "agents" / f"{worker}.md"
     if not definition.is_file():
         raise ValueError(f"registered worker definition is missing: {worker}")
+    repair_artifacts, preserve_artifacts = _spec_repair_scope(target, job)
     ticket = {
-        "schema_version": 1,
+        "schema_version": 2,
         "job_id": job["id"],
         "phase": job["phase"],
         "worker": worker,
@@ -199,6 +213,12 @@ def _ticket(target: Path, job: dict) -> dict:
         "read_paths": _read_paths(target, job),
         "write_paths": list(job.get("required_outputs", [])),
     }
+    if job.get("type") == "spec_batch":
+        ticket.update({
+            "repair_artifacts": repair_artifacts,
+            "preserve_artifacts": preserve_artifacts,
+            "validation_message": job.get("message") if job.get("attempts", 0) else None,
+        })
     path = state.control_dir(target) / "dispatches" / f"{job['id']}.json"
     state.atomic_json(path, ticket)
     return {"ticket_path": path.relative_to(target).as_posix(), **ticket}

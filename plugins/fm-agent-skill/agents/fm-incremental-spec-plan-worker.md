@@ -14,10 +14,9 @@ sidecars. Do not spawn agents. Return only a compact JSON receipt with
 `job_id`, `status`, `plan_path`, `counts`, and a one-sentence summary. The
 Coordinator applies the report only through `incremental.py apply-plan`.
 
-Use specification schema version 3. Preserve FM-Agent's intended-behavior
-reasoning: choose `normative` when root contract evidence exists, otherwise
-generate an `inferred` contract from interface/caller/paired-API/type signals.
-Use `unavailable` only when no falsifiable condition B can be formed. Keep
-normative evidence, inference evidence, and implementation observations
-separate exactly as required by `specification-rules.md`; generated domain
-context guides inference but is not quoted evidence.
+Use FM-Agent's native three-field specification object: exactly `signature`,
+`pre_condition`, and `post_condition`. Preserve FM-Agent's intended-behavior
+reasoning: derive B from user/domain/interface/caller/paired-API/type signals
+before inspecting implementation behavior A. Generated domain context guides
+inference but is not itself a contract, and implementation details must not be
+copied into B.

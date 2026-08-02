@@ -316,11 +316,11 @@ For each specification job, follow FM-Agent's intended-behavior process. First
 derive condition B from domain role, public interface, callers, paired APIs,
 types, and cross-function invariants; then inspect the body as implementation
 observation A. Generated domain context guides inference but is not quoted
-evidence. Do not read test files. Require the Worker to emit schema-v3
-`contract_basis`, normative evidence, inference evidence, implementation
-observations, and confidence. `normative` and `inferred` contracts both proceed
-to A→B Verification; `unavailable` is exceptional and still receives a Worker
-result rather than an executor shortcut.
+evidence. Do not read test files. Require the Worker to emit original FM-Agent's
+native three-field spec (`signature`, `pre_condition`, `post_condition`) plus
+native callee info. The scheduler converts harmless legacy/identity fields at
+the boundary; it does not ask an Agent to repair metadata that the A→B reasoner
+never consumes. Every valid native B proceeds to A→B Verification.
 
 For incremental planning, give `fm-incremental-spec-plan-worker` exactly one
 assigned output: `fm_agent_skill/worker_reports/<job-id>.json`. It writes the
@@ -350,11 +350,11 @@ use `semantic_executor.py fail/retry`; for other jobs use `scheduler.py
 fail/retry`. Retain the same job id and stop at configured
 `retries`. For a spec layer with any newly valid sidecar, retry remaining
 batches immediately; wait 10 seconds only when it made no progress. A retried
-spec batch preserves valid paired sidecars and repairs only incomplete assigned
-artifacts. Pass the exact scheduler `message` to the retried Worker. For schema
-errors, instruct it to reopen only the named assigned sidecar, remove every
-reported unsupported key, add every reported missing key, and recheck the
-closed seven-field schema before returning. Never restart all specification
+spec batch uses the ticket's `repair_artifacts`, `preserve_artifacts`, and
+`validation_message`: preserve valid pairs and repair every invalid pair in one
+pass. Extra fields are removed deterministically; only missing/empty native
+fields, malformed JSON, or invalid callee entries require another Agent call.
+Never restart all specification
 jobs because one batch failed. A verification-level failure is a valid `ERROR` result, not a retry;
 retry only when the Agent or result artifact itself failed. In default
 `agent-executed` mode, a Bug Validator job uses Worker preparation, execution,

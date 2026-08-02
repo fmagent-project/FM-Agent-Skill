@@ -38,6 +38,27 @@ def phase_receipt_ready(target, phase):
     return True, ""
 
 
+def failure_message(target, record, requested):
+    """Never publish an empty failure when scheduler state has the cause."""
+    if isinstance(requested, str) and requested.strip():
+        return requested.strip()
+    phase = record.get("current_phase") or "unknown"
+    jobs_dir = state.skill_dir(target) / "jobs"
+    jobs = [state.read_json(path, {}) for path in sorted(jobs_dir.glob("*.json"))] if jobs_dir.is_dir() else []
+    failures = [
+        f"{job.get('id', 'unknown')}: {job.get('message') or job.get('failure_class') or job.get('status')}"
+        for job in jobs
+        if isinstance(job, dict) and job.get("phase") == phase and job.get("status") in {"failed", "retryable"}
+    ]
+    if failures:
+        return f"{phase} incomplete; " + "; ".join(failures[:8])
+    receipt = state.read_json(state.control_dir(target) / "phase_receipts" / f"{phase}.json", {})
+    reason = receipt.get("semantic_gate_reason") if isinstance(receipt, dict) else None
+    if isinstance(reason, str) and reason.strip():
+        return reason.strip()
+    return f"pipeline failed during {phase} without a more specific diagnostic"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Record gated FM-Agent current-analysis progress.")
     parser.add_argument("action", choices=("prepare", "resume", "phase-start", "phase-complete", "phase-fail", "advance", "complete", "fail", "noop"))
@@ -86,9 +107,10 @@ def main():
             record["phase_status"][phase] = {"status": "succeeded", "ended_at": state.now()}; index = record["phases"].index(phase)
             record["current_phase"] = record["phases"][index + 1] if index + 1 < len(record["phases"]) else phase
         elif args.action == "phase-fail":
-            failure_class = "insufficient_specification" if args.message.startswith("insufficient_specification:") else "verification_incomplete" if args.message.startswith("verification_incomplete:") else "phase_failure"
-            record["phase_status"][phase] = {"status": "failed", "ended_at": state.now(), "message": args.message, "classification": failure_class}
-            record.update({"status": "failed", "ended_at": state.now(), "failure": args.message, "failure_classification": failure_class})
+            message = failure_message(target, record, args.message)
+            failure_class = "insufficient_specification" if message.startswith("insufficient_specification:") else "verification_incomplete" if message.startswith("verification_incomplete:") else "phase_failure"
+            record["phase_status"][phase] = {"status": "failed", "ended_at": state.now(), "message": message, "classification": failure_class}
+            record.update({"status": "failed", "ended_at": state.now(), "failure": message, "failure_classification": failure_class})
         elif args.action == "complete":
             missing = [item for item in record["phases"] if record["phase_status"].get(item, {}).get("status") != "succeeded"]
             if missing: raise SystemExit("cannot complete: phase gates not passed: " + ", ".join(missing))
@@ -98,8 +120,9 @@ def main():
             state.atomic_json(state.skill_dir(target) / "baseline.json", {"schema_version": 4, "baseline_commit": commit, "fingerprint": record["fingerprint"], "inputs": record["inputs"], "completed_at": record["ended_at"]})
             state.version_log(target, commit)
         elif args.action == "fail":
-            failure_class = "insufficient_specification" if args.message.startswith("insufficient_specification:") else "verification_incomplete" if args.message.startswith("verification_incomplete:") else record.get("failure_classification", "pipeline_failure")
-            record.update({"status": "failed", "ended_at": state.now(), "failure": args.message, "failure_classification": failure_class})
+            message = failure_message(target, record, args.message)
+            failure_class = "insufficient_specification" if message.startswith("insufficient_specification:") else "verification_incomplete" if message.startswith("verification_incomplete:") else record.get("failure_classification", "pipeline_failure")
+            record.update({"status": "failed", "ended_at": state.now(), "failure": message, "failure_classification": failure_class})
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})
     record["updated_at"] = state.now(); save(target, record)
     if args.action in {"phase-fail", "fail"}: publish_failure(target, record)

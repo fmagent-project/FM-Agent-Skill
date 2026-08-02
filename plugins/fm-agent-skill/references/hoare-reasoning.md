@@ -16,15 +16,11 @@ counterexample, one exact contiguous source quote, A, B, and the reason.
 Malformed spec, model/tool failure, or unparseable output is `ERROR`, not
 `MATCH` or `MISMATCH`; proceed with other functions.
 
-Before proving a result, inspect `contract_basis`, normative and inference
-evidence, and implementation observations. A `normative` or `inferred` sidecar
-provides condition B and must receive the same FM-Agent A→B reasoning. An
-inferred contract is supported by interface/caller/paired-API/type consistency
-rather than external prose; do not downgrade it solely for lacking documents.
-An `unavailable` contract produces `INCONCLUSIVE` only after the Worker names
-the actual missing semantic signal. Implementation observations may derive A
-but cannot prove B or MATCH. Never turn an observed constant, comparison,
-formula, field, or branch into its own proof obligation.
+Treat the native three-field sidecar as original FM-Agent's model-derived
+condition B. Derive actual behavior A independently from the body. Never turn
+an observed constant, comparison, formula, field, or branch into its own proof
+obligation or use it to reinterpret B. Use `INCONCLUSIVE` only after the Worker
+names a genuine reasoning gap, not merely because no external prose exists.
 
 The assigned Codex/Claude Worker is the reasoner; no local script calls a model
 API. It writes one structured postcondition/spec result. On invalid output the

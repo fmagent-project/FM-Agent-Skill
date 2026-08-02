@@ -31,9 +31,9 @@ All mutable Skill state lives under `fm_agent_skill/`.
   or merge phases unless `one_phase` is enabled.
 - `fm_agent/logic_verification_results/` has one result per extracted function.
   A verdict is `MATCH`, direct `MISMATCH`, `DEPENDENCY_RISK`, `INCONCLUSIVE`,
-  or `ERROR`. `MATCH` and `MISMATCH` require an independent `normative` or
-  `inferred` specification contract; implementation observations cannot define
-  expected behavior.
+  or `ERROR`. `MATCH` and `MISMATCH` compare independently derived actual
+  behavior A with the native FM-Agent specification B; implementation behavior
+  cannot redefine B.
   Dependency risk records affected callers but is not a direct bug candidate.
 - `fm_agent/bug_validation/` is generated only when a direct `MISMATCH` is
   dynamically probed. Every current candidate has a detail Markdown file,
@@ -68,26 +68,20 @@ All mutable Skill state lives under `fm_agent_skill/`.
 
 ## Sidecar schemas
 
-`<function>.<ext>.spec.json` is exactly:
+`<function>.<ext>.spec.json` uses original FM-Agent's exact format:
 
 ```json
-{"schema_version":3,"signature":"...","pre_condition":"...","post_condition":"...","contract_basis":"normative|inferred|unavailable","normative_evidence":[{"kind":"user_requirement|public_api_contract|caller_contract","source":"repository-relative path or caller function id","quote":"exact source text","claims":["contract clause"]}],"inference_evidence":[{"kind":"interface_name|caller_expectation|paired_api|cross_function_consistency|type_invariant","source":"repository-relative production source","quote":"exact semantic signal","claims":["inferred contract clause"]}],"observations":[{"kind":"implementation","source":"repository-relative production source","quote":"exact implementation text","claims":["observed behavior"]}],"confidence":"high|medium|low"}
+{"signature":"...","pre_condition":"...","post_condition":"..."}
 ```
 
-`normative/high` requires at least one exact `user_requirement` or
-`public_api_contract`; generated domain context and caller-only cycles are not
-authority. `inferred/medium` requires at least one exact interface, caller,
-paired-API, cross-function, or type signal and no root normative evidence.
-`unavailable/low` has no contract evidence and at least one implementation
-observation. Every evidence claim must appear verbatim in the pre/postcondition.
-User requirements quote the copied files under
-`domain_context/user_knowledge/`; public API contracts quote non-generated
-documentation or source comments. Oracle markers such as `BUG:`, `FIXME:`,
-`TODO:`, seeded bugs, and known defects are rejected as normative evidence.
-
-The nine-key object is a closed schema: extra keys are invalid. Encode
-observable error, exception, rejection, and sentinel behavior inside
-`post_condition`; do not add an `error_behavior` field.
+Derive B from domain, interface, callers, paired APIs, types, and user knowledge
+before reading detailed implementation behavior. Oracle markers such as
+`BUG:`, `FIXME:`, `TODO:`, seeded bugs, and known defects are rejected inside
+the contract. Encode observable error, exception, rejection, and sentinel
+behavior inside `post_condition`. The scheduler deterministically converts
+legacy/rich objects by retaining only these three valid fields and folding a
+legacy `error_behavior` string into `post_condition`, so identity or evidence
+metadata cannot force an otherwise valid batch to retry.
 
 `<function>.<ext>.info.json` is exactly `{"callees": [...]}`. Every callee is
 an object with string fields `name`, `signature`, `pre_condition`, and

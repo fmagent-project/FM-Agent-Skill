@@ -137,10 +137,13 @@ is retried as an output failure. Bug Validator retries
 runtime failures up to five attempts and repeats a completed negative result
 twice by default, preserving all three probes.
 
-Specification JSON uses a closed seven-field schema. Observable failure and
-exception behavior belongs in `post_condition`; identity, phase, summary, and
-`error_behavior` convenience fields are rejected with a field-level scheduler
-message and repaired by the same job. A failed phase never falls back to a
+Specification JSON uses original FM-Agent's closed three-field schema:
+`signature`, `pre_condition`, and `post_condition`. Observable failure and
+exception behavior belongs in `post_condition`. The scheduler deterministically
+strips legacy identity, evidence, phase, summary, and convenience fields when
+the three native fields are valid, folding a legacy `error_behavior` string
+into `post_condition`; it reports every genuinely invalid pair in
+the batch and retries only those pairs. A failed phase never falls back to a
 static-audit result. The original worktree receives a small failure receipt,
 and `diagnose.py` reports that no official result exists until all gates pass.
 

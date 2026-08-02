@@ -121,13 +121,28 @@ def _negative_attempts(target, payload):
     if not isinstance(value, int) or value < 0: raise ValueError("negative_retries must be a non-negative integer")
     return value + 1
 def _validate(target, job, result=None):
+    errors = []
     missing = [item for item in job.get("required_outputs", []) if not (target / item).exists()]
-    if missing: return "missing required worker output: " + ", ".join(missing)
+    if missing: errors.append("missing required worker output: " + ", ".join(missing))
     if job["type"] in {"spec_batch", "reconcile_caller_info"}:
         if not job.get("artifacts"): return "sidecar-writing job has no assigned artifacts"
+        normalized = []
         for rel in job["artifacts"]:
-            ok, reason = state.sidecars_ready(target / "fm_agent" / "extracted_functions" / rel)
-            if not ok: return f"invalid assigned sidecars for {rel}: {reason}"
+            artifact = target / "fm_agent" / "extracted_functions" / rel
+            spec_path, info_path = Path(f"{artifact}.spec.json"), Path(f"{artifact}.info.json")
+            before = (state.read_json(spec_path, None), state.read_json(info_path, None))
+            ok, reason = state.sidecars_ready(artifact)
+            after = (state.read_json(spec_path, None), state.read_json(info_path, None))
+            if before != after:
+                normalized.append(rel)
+            if not ok:
+                errors.append(f"{rel}: {reason}")
+        if normalized:
+            job["normalized_artifacts"] = sorted(set(job.get("normalized_artifacts", [])) | set(normalized))
+        if errors:
+            return f"invalid assigned sidecars ({len(errors)} issue(s)):\n- " + "\n- ".join(errors)
+    elif errors:
+        return "; ".join(errors)
     if job["type"] == "phase_plan":
         phases = state.read_json(target / "fm_agent" / "phases.json", {})
         if not isinstance(phases, dict) or not phases.get("phases"): return "phase-plan worker did not create a non-empty fm_agent/phases.json"
@@ -265,6 +280,11 @@ def transition(target, job_id, action, result, message, failure_class):
             job["negative_attempt_index"] = int(job.get("negative_attempts", 0)) + 1
     elif action == "complete":
         if job["status"] != "running": raise ValueError("only a running job can complete")
+        if isinstance(result, dict) and not job.get("legacy_contract"):
+            extra_report_fields = sorted(set(result) - REPORT_KEYS)
+            if extra_report_fields:
+                job["normalized_report_fields"] = sorted(set(job.get("normalized_report_fields", [])) | set(extra_report_fields))
+                result = {key: value for key, value in result.items() if key in REPORT_KEYS}
         error = _validate_report(job, result) or _validate(target, job, result)
         if error: _fail(job, "output", error)
         elif job["type"] == "bug_validate" and not job.get("legacy_contract") and result["classification"] in BUG_NEGATIVE_CLASSIFICATIONS:

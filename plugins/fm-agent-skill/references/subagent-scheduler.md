@@ -44,9 +44,11 @@ Retain the same job id for retries. `execution`, `output`, and `interrupted`
 failures use `scheduler.py fail`; if retryable, call `scheduler.py retry` under
 the configured retry policy. For a specification layer, retry
 remaining batches immediately when any paired sidecar became valid; otherwise
-wait 10 seconds. Feed the scheduler's exact validation `message` back to the
-same Worker and repair only its assigned invalid sidecars. Unknown or missing
-closed-schema fields are an `output` failure; they are not a reason to abandon
+wait 10 seconds. The next deterministic ticket carries `repair_artifacts`,
+`preserve_artifacts`, and the exact validation message. Repair every rejected
+pair together and never rewrite a preserved pair. Harmless extra fields are
+converted to the native FM-Agent schema before validation; missing native
+fields remain an `output` failure and are not a reason to abandon
 other batches or bypass the phase. `input`, `semantic`, and `cancelled` are
 terminal. A semantic verification error is recorded as `ERROR`, but the
 Verification gate cannot create an official baseline while any ERROR remains.

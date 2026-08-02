@@ -34,28 +34,17 @@ POSTCONDITION_REASONING_FIELDS = {
 }
 BUG_ATTEMPT_CLASSIFICATIONS = {"confirmed", "not_reproduced", "inconclusive"}
 BUG_FINAL_STATUSES = {"confirmed", "rejected", "inconclusive"}
-SPEC_FIELDS = {
-    "schema_version", "signature", "pre_condition", "post_condition",
-    "contract_basis", "normative_evidence", "inference_evidence",
-    "observations", "confidence",
-}
-CALLEE_FIELDS = {"name", "signature", "pre_condition", "post_condition"}
-ROOT_NORMATIVE_EVIDENCE_KINDS = {"user_requirement", "public_api_contract"}
-NORMATIVE_EVIDENCE_KINDS = ROOT_NORMATIVE_EVIDENCE_KINDS | {"caller_contract"}
-INFERENCE_EVIDENCE_KINDS = {
-    "interface_name", "caller_expectation", "paired_api",
-    "cross_function_consistency", "type_invariant",
-}
-OBSERVATION_KINDS = {"implementation"}
+SPEC_FIELD_ORDER = ("signature", "pre_condition", "post_condition")
+SPEC_FIELDS = set(SPEC_FIELD_ORDER)
+CALLEE_FIELD_ORDER = ("name", "signature", "pre_condition", "post_condition")
+CALLEE_FIELDS = set(CALLEE_FIELD_ORDER)
 SPEC_CONTRACT_BASES = {"normative", "inferred", "unavailable"}
-SPEC_CONFIDENCE = {"high", "medium", "low"}
 OBSERVATIONAL_CONTEXT_MARKER = "FM_AGENT_OBSERVATIONAL_CONTEXT_V1"
 _ORACLE_MARKER = re.compile(
     r"(?:\bBUG\s*:|\bFIXME\s*:|\bTODO\s*:|\bseeded[ -]bug\b|"
     r"\bknown defect\b|\bintentionally (?:broken|defective)\b)",
     re.IGNORECASE,
 )
-_DOCUMENT_EXTENSIONS = {".md", ".rst", ".txt", ".adoc"}
 PHASES = {
     "full": ["preflight", "project_understanding", "phase_cleanup", "extraction", "call_graph", "specification", "verification", "bug_validation", "finalize"],
     "incremental": ["validate_baseline", "refresh_plan", "preserve_specs", "diff", "rebuild_graph", "select_scope", "update_specs", "verify_affected", "bug_validation", "finalize"],
@@ -315,30 +304,8 @@ def is_metadata_sidecar(path: Path | str) -> bool:
     return str(path).replace("\\", "/").endswith(METADATA_SIDECAR_SUFFIXES)
 
 
-def _valid_evidence_item(item, kinds: set[str]) -> bool:
-    return (
-        isinstance(item, dict)
-        and set(item) == {"kind", "source", "quote", "claims"}
-        and item.get("kind") in kinds
-        and isinstance(item.get("source"), str)
-        and bool(item["source"].strip())
-        and isinstance(item.get("quote"), str)
-        and bool(item["quote"].strip())
-        and len(item["quote"]) <= 2000
-        and isinstance(item.get("claims"), list)
-        and item["claims"]
-        and all(isinstance(claim, str) and claim.strip() for claim in item["claims"])
-    )
-
-
 def _spec_schema_ready(data) -> tuple[bool, str]:
-    """Validate the exact sidecar schema and return an actionable error.
-
-    Spec workers are intentionally not allowed to invent convenience fields.
-    In particular, exceptional behavior belongs in ``post_condition`` rather
-    than a parallel ``error_behavior`` field that downstream consumers do not
-    understand.
-    """
+    """Validate FM-Agent's native three-field specification schema."""
     if not isinstance(data, dict):
         return False, "spec sidecar must be a JSON object"
     actual = set(data)
@@ -351,35 +318,10 @@ def _spec_schema_ready(data) -> tuple[bool, str]:
         if extra:
             details.append("unsupported fields: " + ", ".join(extra))
         return False, "spec sidecar fields must match schema exactly (" + "; ".join(details) + ")"
-    if data.get("schema_version") != 3:
-        return False, "spec sidecar schema_version must be 3"
     if not all(isinstance(data[field], str) and data[field].strip() for field in ("signature", "pre_condition", "post_condition")):
         return False, "signature, pre_condition, and post_condition must be non-empty strings"
-    normative = data.get("normative_evidence")
-    inferred = data.get("inference_evidence")
-    observations = data.get("observations")
-    if not isinstance(normative, list) or not all(_valid_evidence_item(item, NORMATIVE_EVIDENCE_KINDS) for item in normative):
-        return False, "normative_evidence must contain only exact schema-v3 evidence objects"
-    if not isinstance(inferred, list) or not all(_valid_evidence_item(item, INFERENCE_EVIDENCE_KINDS) for item in inferred):
-        return False, "inference_evidence must contain only exact schema-v3 inference objects"
-    if not isinstance(observations, list) or not all(_valid_evidence_item(item, OBSERVATION_KINDS) for item in observations):
-        return False, "observations must contain only exact implementation evidence objects"
-    basis = data.get("contract_basis")
-    if basis not in SPEC_CONTRACT_BASES:
-        return False, "contract_basis must be normative, inferred, or unavailable"
-    confidence = data.get("confidence")
-    if confidence not in SPEC_CONFIDENCE:
-        return False, "confidence must be high, medium, or low"
-    if basis == "normative":
-        if confidence != "high":
-            return False, "normative contract requires high confidence"
-        if not ({item["kind"] for item in normative} & ROOT_NORMATIVE_EVIDENCE_KINDS):
-            return False, "normative contract requires user_requirement or public_api_contract evidence"
-    elif basis == "inferred":
-        if confidence != "medium" or ({item["kind"] for item in normative} & ROOT_NORMATIVE_EVIDENCE_KINDS) or not inferred:
-            return False, "inferred contract requires medium confidence, inference evidence, and no root normative evidence"
-    elif confidence != "low" or normative or inferred or not observations:
-        return False, "unavailable contract requires low confidence, no contract evidence, and at least one implementation observation"
+    if _ORACLE_MARKER.search("\n".join((data["pre_condition"], data["post_condition"]))):
+        return False, "specification contract contains benchmark/debug oracle markers"
     return True, ""
 
 
@@ -387,12 +329,46 @@ def _valid_spec(data) -> bool:
     return _spec_schema_ready(data)[0]
 
 
-def _project_for_artifact(artifact: Path) -> Path | None:
-    artifact = artifact.resolve()
-    for parent in artifact.parents:
-        if parent.name == "extracted_functions" and parent.parent.name == "fm_agent":
-            return parent.parent.parent
-    return None
+def canonical_spec(data) -> tuple[dict | None, list[str]]:
+    """Convert a model response to FM-Agent's native specification boundary.
+
+    Older Skill workers and permissive hosts sometimes add identity, evidence,
+    phase, or error metadata.  Those fields do not belong to the FM-Agent
+    contract consumed by the reasoner.  Strip them deterministically instead
+    of spending another semantic Worker attempt on a mechanical rewrite.
+    """
+    if not isinstance(data, dict):
+        return None, []
+    candidate = {field: data.get(field) for field in SPEC_FIELD_ORDER}
+    error_behavior = data.get("error_behavior")
+    if (
+        isinstance(error_behavior, str) and error_behavior.strip()
+        and isinstance(candidate.get("post_condition"), str)
+        and error_behavior.strip() not in candidate["post_condition"]
+    ):
+        candidate["post_condition"] = candidate["post_condition"].rstrip() + "\nError behavior: " + error_behavior.strip()
+    if not _spec_schema_ready(candidate)[0]:
+        return None, []
+    return candidate, sorted(set(data) - SPEC_FIELDS)
+
+
+def canonical_info(data) -> tuple[dict | None, list[str]]:
+    """Convert callee metadata to FM-Agent's native closed schema."""
+    if not isinstance(data, dict) or not isinstance(data.get("callees"), list):
+        return None, []
+    callees, removed = [], set(data) - {"callees"}
+    for raw in data["callees"]:
+        if not isinstance(raw, dict):
+            return None, []
+        item = dict(raw)
+        if not isinstance(item.get("name"), str) and isinstance(item.get("id"), str):
+            item["name"] = item["id"]
+        candidate = {field: item.get(field) for field in CALLEE_FIELD_ORDER}
+        if not all(isinstance(candidate[field], str) for field in CALLEE_FIELDS):
+            return None, []
+        removed.update(set(item) - CALLEE_FIELDS)
+        callees.append(candidate)
+    return {"callees": callees}, sorted(removed)
 
 
 def _relative_file(project: Path, value: str) -> Path | None:
@@ -403,37 +379,6 @@ def _relative_file(project: Path, value: str) -> Path | None:
     if resolved != project.resolve() and project.resolve() not in resolved.parents:
         return None
     return resolved if resolved.is_file() else None
-
-
-def _snapshot_file(project: Path, path: Path) -> bool:
-    """Require a repository file whose bytes still belong to the current HEAD."""
-    rel = path.relative_to(project).as_posix()
-    tracked = git(project, "ls-files", "--error-unmatch", "--", rel, check=False)
-    changed = git(project, "diff", "--name-only", "HEAD", "--", rel, check=False)
-    return tracked == rel and not changed
-
-
-def _quote_is_documentation(path: Path, text: str, quote: str) -> bool:
-    if path.suffix.lower() in _DOCUMENT_EXTENSIONS:
-        return quote in text
-    regions = re.findall(r"//[^\n]*|/\*.*?\*/|#[^\n]*|'''(?:.|\n)*?'''|\"\"\"(?:.|\n)*?\"\"\"", text, re.DOTALL)
-    return any(quote in region for region in regions)
-
-
-def _caller_contract_valid(project: Path, source: str, quote: str, visited: set[Path]) -> bool:
-    index = source_index(project) or {}
-    item = next((entry for entry in index.get("functions", []) if isinstance(entry, dict) and entry.get("id") == source), None)
-    rel = item.get("artifact") if isinstance(item, dict) else None
-    if not isinstance(rel, str):
-        return False
-    artifact = fm_dir(project) / "extracted_functions" / rel
-    spec = read_json(Path(f"{artifact}.spec.json"), None)
-    return bool(
-        _valid_spec(spec)
-        and spec.get("confidence") == "high"
-        and quote in {spec.get("pre_condition"), spec.get("post_condition")}
-        and _spec_evidence_ready(artifact, spec, visited)[0]
-    )
 
 
 def _knowledge_manifest_ready(project: Path) -> tuple[bool, str, list[dict]]:
@@ -470,87 +415,17 @@ def _knowledge_manifest_ready(project: Path) -> tuple[bool, str, list[dict]]:
     return True, "", entries
 
 
-def _user_requirement_valid(project: Path, path: Path, quote: str) -> bool:
-    ready, _, entries = _knowledge_manifest_ready(project)
-    if not ready:
-        return False
-    rel = path.relative_to(project).as_posix()
-    entry = next((item for item in entries if isinstance(item, dict) and item.get("copied_path") == rel), None)
-    return bool(
-        entry
-        and isinstance(entry.get("sha256"), str)
-        and file_hash(path) == entry["sha256"]
-        and quote in path.read_text(encoding="utf-8", errors="replace")
-    )
-
-
-def _spec_evidence_ready(artifact: Path, spec: dict, visited: set[Path] | None = None) -> tuple[bool, str]:
-    project = _project_for_artifact(artifact)
-    if project is None:
-        return False, "specification artifact is outside fm_agent/extracted_functions"
-    artifact = artifact.resolve()
-    visited = set() if visited is None else set(visited)
-    if artifact in visited:
-        return False, "caller contract evidence contains a cycle"
-    visited.add(artifact)
-    contract_text = "\n".join((spec["pre_condition"], spec["post_condition"]))
-    for item in spec["normative_evidence"]:
-        combined = "\n".join([item["quote"], *item["claims"]])
-        if _ORACLE_MARKER.search(combined):
-            return False, "normative evidence contains benchmark/debug oracle markers"
-        if not all(claim in contract_text for claim in item["claims"]):
-            return False, "normative evidence claim is not represented verbatim in the contract"
-        if item["kind"] == "caller_contract":
-            if not _caller_contract_valid(project, item["source"], item["quote"], visited):
-                return False, "caller evidence does not name an existing high-confidence contract"
-            continue
-        path = _relative_file(project, item["source"])
-        if path is None:
-            return False, "normative evidence source is missing or outside the project snapshot"
-        rel = path.relative_to(project).as_posix()
-        text = path.read_text(encoding="utf-8", errors="replace")
-        if item["kind"] == "user_requirement":
-            if not rel.startswith("fm_agent/spec_prompts/domain_context/user_knowledge/") or not _user_requirement_valid(project, path, item["quote"]):
-                return False, "user requirement must quote copied user knowledge exactly"
-        elif rel.startswith(("fm_agent/", "fm_agent_skill/")) or is_test_source_path(rel) or not _snapshot_file(project, path) or not _quote_is_documentation(path, text, item["quote"]):
-            return False, "public API evidence must quote non-generated documentation or a source comment exactly"
-    for item in spec["inference_evidence"]:
-        combined = "\n".join([item["quote"], *item["claims"]])
-        if _ORACLE_MARKER.search(combined):
-            return False, "inference evidence contains benchmark/debug oracle markers"
-        if not all(claim in contract_text for claim in item["claims"]):
-            return False, "inference evidence claim is not represented verbatim in the contract"
-        path = _relative_file(project, item["source"])
-        if path is None:
-            return False, "inference evidence source is missing or outside the project snapshot"
-        rel = path.relative_to(project).as_posix()
-        if rel.startswith(("fm_agent/", "fm_agent_skill/")) or is_test_source_path(rel) or not _snapshot_file(project, path):
-            return False, "inference evidence must quote a tracked production source or public interface"
-        if item["quote"] not in path.read_text(encoding="utf-8", errors="replace"):
-            return False, "inference evidence quote is not present in its source"
-    for item in spec["observations"]:
-        path = _relative_file(project, item["source"])
-        if path is None or path.relative_to(project).as_posix().startswith(("fm_agent/", "fm_agent_skill/")) or not _snapshot_file(project, path):
-            return False, "implementation observation must quote a production source file"
-        if item["quote"] not in path.read_text(encoding="utf-8", errors="replace"):
-            return False, "implementation observation quote is not present in its source"
-    return True, ""
-
-
 def spec_confidence(artifact: Path) -> str | None:
     spec = read_json(Path(f"{artifact}.spec.json"), None)
-    if not _valid_spec(spec):
-        return None
-    ready, _ = _spec_evidence_ready(artifact, spec)
-    return spec.get("confidence") if ready else None
+    return "medium" if _valid_spec(spec) else None
 
 
 def spec_contract_basis(artifact: Path) -> str | None:
     spec = read_json(Path(f"{artifact}.spec.json"), None)
-    if not _valid_spec(spec):
-        return None
-    ready, _ = _spec_evidence_ready(artifact, spec)
-    return spec.get("contract_basis") if ready else None
+    # Original FM-Agent treats every generated behavioral specification as its
+    # model-inferred condition B.  External provenance is useful context, but
+    # it is not part of the persisted spec schema or a prerequisite for A→B.
+    return "inferred" if _valid_spec(spec) else None
 
 
 def _valid_info(data) -> bool:
@@ -571,12 +446,22 @@ def sidecars_ready(artifact: Path) -> tuple[bool, str]:
         return False, "extracted source contains inline specification metadata"
     spec_path, info_path = Path(f"{artifact}.spec.json"), Path(f"{artifact}.info.json")
     spec, info = read_json(spec_path, None), read_json(info_path, None)
+    canonical, _ = canonical_spec(spec)
+    if canonical is None and isinstance(spec, dict) and all(isinstance(spec.get(field), str) for field in SPEC_FIELDS):
+        # Still strip legacy metadata when the native contract itself is
+        # invalid, so the validation message names the real contract defect
+        # (for example an oracle marker) rather than irrelevant extra keys.
+        canonical = {field: spec[field] for field in SPEC_FIELD_ORDER}
+    if canonical is not None and canonical != spec:
+        atomic_json(spec_path, canonical)
+        spec = canonical
+    canonical_callees, _ = canonical_info(info)
+    if canonical_callees is not None and canonical_callees != info:
+        atomic_json(info_path, canonical_callees)
+        info = canonical_callees
     spec_ok, spec_reason = _spec_schema_ready(spec)
     if not spec_ok:
         return False, f"invalid spec sidecar {spec_path.name}: {spec_reason}"
-    evidence_ok, evidence_reason = _spec_evidence_ready(artifact, spec)
-    if not evidence_ok:
-        return False, f"invalid specification evidence: {evidence_reason}"
     if not _valid_info(info):
         return False, f"missing or invalid info sidecar: {info_path.name}"
     return True, ""
