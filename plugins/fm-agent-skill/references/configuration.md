@@ -13,9 +13,9 @@ each knowledge-file content hash. It exists to prevent an incremental run from
 reusing specifications built for a different scope or knowledge set.
 
 `scheduler_executor` is fixed to `host-subagent`: semantic work uses the active
-Claude Code or Codex subagent facility. The enforced default profile is ten
-active workers globally, four specification batches, eight verification workers,
-two Bug Validators, and two read-only incremental plan workers. Configure these
+Claude Code or Codex subagent facility. The enforced default profile is sixteen
+active workers globally, six specification batches, twelve verification workers,
+four Bug Validators, and four read-only incremental plan workers. Configure these
 through `max_active_subagents`, `spec_concurrency`, `verify_concurrency`,
 `bug_validation_concurrency`, and `read_only_plan_concurrency`.
 `worker_target_tokens` (12000), `worker_max_functions` (20), and

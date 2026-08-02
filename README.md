@@ -166,7 +166,7 @@ guarantee: use it only for projects you trust. It forbids `sudo`, dependency
 installation, Git-state changes and unrelated file access, but it does not
 provide the fixed-argv isolation of the optional `adapter` mode.
 
-Up to two Bug Validator jobs run concurrently by default. Every dynamic Worker
+Up to four Bug Validator jobs run concurrently by default. Every dynamic Worker
 uses its own attempt-local workspace and cache; it must not write shared
 project-root build outputs. Adapter-mode build profiles are also stored beside
 their owning attempt rather than in shared control state.

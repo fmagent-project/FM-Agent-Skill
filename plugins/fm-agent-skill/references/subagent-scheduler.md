@@ -96,11 +96,11 @@ Coordinator:
 
 | Work type | Maximum active jobs |
 | --- | ---: |
-| all host subagents | 10 |
-| `spec_batch` | 4 |
-| `verify_function` | 8 |
-| `bug_validate` | 2 |
-| `incremental_spec_plan` | 2 |
+| all host subagents | 16 |
+| `spec_batch` | 6 |
+| `verify_function` | 12 |
+| `bug_validate` | 4 |
+| `incremental_spec_plan` | 4 |
 | phase/refine/domain/edge/select/reconcile workers | 1 each |
 
 The corresponding configuration keys are `max_active_subagents`,

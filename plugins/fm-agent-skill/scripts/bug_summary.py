@@ -23,14 +23,33 @@ def selected_ids(target, mode: str) -> set[str] | None:
 def write_summary(target, mode: str) -> dict:
     candidates = state.direct_mismatch_ids(target, selected_ids(target, mode))
     jobs = [
-        job for job in scheduler.jobs_for_phase(target, "bug_validation")
+        job for job in scheduler.current_jobs_for_phase(target, "bug_validation")
         if job.get("type") == "bug_validate" and not job.get("legacy_contract")
     ]
-    job_functions = {
-        job.get("input", {}).get("function_id"): job
-        for job in jobs
-        if isinstance(job.get("input"), dict) and isinstance(job["input"].get("function_id"), str)
-    }
+    # Current planners always put function_id in the job input.  Older
+    # coordinator-created jobs used only bug_id and required_outputs; resolve
+    # those jobs only when their one result path identifies exactly one report.
+    # This keeps the candidate/job equality gate strict while allowing a
+    # resumable pre-SQLite run to finish safely.
+    reports_root = state.fm_dir(target) / "bug_validation"
+    report_by_path = {}
+    for path in reports_root.glob("*.result.json") if reports_root.is_dir() else []:
+        report = state.read_json(path, None)
+        if isinstance(report, dict) and isinstance(report.get("function_id"), str):
+            report_by_path[path.relative_to(target).as_posix()] = report["function_id"]
+    job_functions = {}
+    for job in jobs:
+        input_data = job.get("input") if isinstance(job.get("input"), dict) else {}
+        function_id = input_data.get("function_id")
+        if not isinstance(function_id, str):
+            paths = [value for value in job.get("required_outputs", []) if isinstance(value, str)]
+            matches = {report_by_path[path] for path in paths if path in report_by_path}
+            if len(matches) == 1:
+                function_id = next(iter(matches))
+        if isinstance(function_id, str):
+            if function_id in job_functions:
+                raise ValueError(f"Bug Validator has duplicate jobs for {function_id}")
+            job_functions[function_id] = job
     if set(job_functions) != candidates:
         raise ValueError("Bug Validator jobs do not match current direct MISMATCH candidates")
     unfinished = [
@@ -54,6 +73,9 @@ def write_summary(target, mode: str) -> dict:
         raise ValueError("bug reports do not match current direct MISMATCH candidates")
     for function_id, job in job_functions.items():
         expected = job.get("bug_result_path")
+        if not isinstance(expected, str):
+            outputs = [value for value in job.get("required_outputs", []) if isinstance(value, str)]
+            expected = outputs[0] if len(outputs) == 1 else None
         if not isinstance(expected, str) or not (target / expected).is_file():
             raise ValueError(f"Bug Validator result path is missing for {function_id}")
         # The exact path check avoids accepting a same-function report written

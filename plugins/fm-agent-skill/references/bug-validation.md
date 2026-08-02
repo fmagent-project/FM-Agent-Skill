@@ -15,10 +15,16 @@ that a snapshot is buildable; it is not behavioral evidence. Only an executed
 minimal probe whose actual output differs from the validated normative or inferred contract
 may produce `confirmed`.
 
-Before the first candidate, run `probe_runner.py detect`; its profile at
+In default `agent-executed` mode, do **not** run `probe_runner.py detect` and
+do not treat a missing fixed adapter as an unavailable runtime. The Worker
+chooses the repository's actual toolchain (including a Makefile) and records
+its execution evidence. Run `probe_runner.py detect` only in the optional
+restricted `adapter` mode; its profile at
 `fm_agent_skill/control/build_profile.json` selects an optional safe build
 adapter. A later adapter-mode `probe_runner.py run` writes its profile beside
-that attempt rather than to this shared discovery path. Language capabilities are defined once in
+that attempt rather than to this shared discovery path. A C/C++ CMake adapter
+requires `CMakeLists.txt`; a system `cmake` executable alone cannot build a
+Makefile project. Language capabilities are defined once in
 `src/fm_agent_core/languages.py`: canonical names, file extensions, CodeGraph
 names, Tree-sitter grammar names, span extractor, public-entry strategy, build
 metadata detector, build adapter, dynamic adapter, and support level must all
@@ -71,9 +77,12 @@ reproduction.
 
 For each candidate and attempt:
 
-1. Start the same `bug_validate` job and invoke `fm-bug-validate-worker` in its
+1. Obtain a claimed `bug_validate` ticket through `durable_executor.py next`,
+   then invoke `fm-bug-validate-worker` in its
    preparation pass. It writes `reproduction.json` and `probe.<ext>` under its
-   assigned `fm_agent_skill/probes/<bug-id>/attempt_<n>/` directory.
+   assigned `fm_agent_skill/probes/<bug-id>/attempt_<n>/` directory. Do not
+   call `bug_validation_executor.py start` again: the durable executor already
+   owns the atomic scheduler start transition.
 2. Validate that the contract names the current snapshot, a structured public
    entry point (`ecosystem`, `kind`, repository-relative `target`, `symbol`),
    a fixed language extension, no shell command, and fixed `CONFIRMED` /
@@ -84,7 +93,7 @@ For each candidate and attempt:
    execution pass. It uses the repository's real toolchain and build system,
    records every command, exit code and bounded output in
    `reproduction_result.json`, and may support any FM-Agent language. Up to
-   `bug_validation_concurrency` jobs (two by default) may execute together;
+   `bug_validation_concurrency` jobs (four by default) may execute together;
    every recorded command must use a working directory below that attempt, and
    any build workspace or cache must be private to it.
 3. Submit that immutable execution evidence to the executor. If it records

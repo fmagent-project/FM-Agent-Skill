@@ -31,11 +31,11 @@ TYPE_CAP_KEYS = {
     "incremental_spec_plan": "read_only_plan_concurrency",
 }
 DEFAULT_CAPS = {
-    "max_active_subagents": 10,
-    "spec_concurrency": 4,
-    "verify_concurrency": 8,
-    "bug_validation_concurrency": 2,
-    "read_only_plan_concurrency": 2,
+    "max_active_subagents": 16,
+    "spec_concurrency": 6,
+    "verify_concurrency": 12,
+    "bug_validation_concurrency": 4,
+    "read_only_plan_concurrency": 4,
 }
 
 def _safe_id(value):
@@ -561,17 +561,38 @@ def phase_receipt(target, phase):
     return {"receipt_path": path.relative_to(target).as_posix(), **receipt}
 
 
-def jobs_for_phase(target, phase):
+def jobs_for_phase(target, phase, run_id=None):
     connection = _connect(target)
-    rows = connection.execute("SELECT payload_json FROM jobs WHERE phase=? ORDER BY job_id", (phase,)).fetchall()
+    if run_id is None:
+        rows = connection.execute("SELECT payload_json FROM jobs WHERE phase=? ORDER BY job_id", (phase,)).fetchall()
+    else:
+        rows = connection.execute(
+            "SELECT payload_json FROM jobs WHERE phase=? AND run_id=? ORDER BY job_id",
+            (phase, run_id),
+        ).fetchall()
     connection.close()
     if rows:
         return [json.loads(row["payload_json"]) for row in rows]
+    # A current-run query must not fall back to the legacy directory: those
+    # files have no run identity and could belong to an older snapshot.
+    if run_id is not None:
+        return []
     # Read-only compatibility for interrupted pre-SQLite runs. This fallback
     # is never used by ready/admissible and does not mutate legacy files.
     root = state.skill_dir(target) / "jobs"
     values = [state.read_json(path, {}) for path in sorted(root.glob("*.json"))] if root.is_dir() else []
     return [value for value in values if isinstance(value, dict) and value.get("phase") == phase]
+
+
+def current_jobs_for_phase(target, phase):
+    """Return jobs belonging to the active snapshot/run only.
+
+    A SQLite scheduler database can outlive an analysis.  Consumers that
+    summarize a phase must never combine jobs from an older run with the
+    current candidate set.
+    """
+    run_id, _, _ = _run_id(target)
+    return jobs_for_phase(target, phase, run_id=run_id)
 
 
 def _lease_expiry(target):

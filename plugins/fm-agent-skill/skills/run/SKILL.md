@@ -367,7 +367,7 @@ jobs because one batch failed. A verification-level failure is a valid `ERROR` r
 retry only when the Agent or result artifact itself failed. In default
 `agent-executed` mode, a Bug Validator job uses Worker preparation, execution,
 and finalization passes; optional `adapter` mode uses the Coordinator-owned
-dynamic runner between preparation and finalization. Up to two Bug Validator
+dynamic runner between preparation and finalization. Up to four Bug Validator
 jobs may run concurrently, but each uses only its own attempt-local workspace
 and cache. Its runtime failures retry up to five attempts by default. A
 completed `not_reproduced` or `inconclusive` result is not a runtime failure:
@@ -437,25 +437,20 @@ exact offending source quote is invalid: retry it and never schedule it for Bug
 Validator. Do not complete Verification when fewer than half the selected
 functions have an independent contract, fewer than half reach MATCH/MISMATCH,
 or any result is `ERROR`; the stage gate reports `insufficient_specification` or
-`verification_incomplete`. Before the
-first direct candidate, detect and record the safe build adapter:
-
-```bash
-<python3> "$FM_AGENT_SKILL_ROOT/scripts/probe_runner.py" detect \
-  --project "$PROJECT"
-```
+`verification_incomplete`. In default `agent-executed` mode, do **not** call
+`probe_runner.py detect`. It is a fixed-argv restricted-adapter detector and a
+C++ Makefile project correctly reports no CMake adapter even when `cmake` is
+installed. The named Bug Validator Worker must instead select and record the
+real project toolchain in its attempt-local workspace, as original FM-Agent
+does. Run `probe_runner.py detect` only when configuration explicitly selects
+`bug_validation_execution: adapter`.
 
 For every Bug Validator job, use the host-coordinated deterministic state
 machine; do not manually sequence its preparation, runner, finalization, or
-summary scripts. A manifest must include `input.bug_id` and `input.mode`. After
-the normal scheduler admission, call:
-
-```bash
-<python3> "$FM_AGENT_SKILL_ROOT/scripts/bug_validation_executor.py" start \
-  --project "$PROJECT" --job-id "$JOB_ID"
-```
-
-It returns exactly one next action. On `host_worker`, invoke only the named
+summary scripts. A manifest must include `input.bug_id` and `input.mode`.
+`durable_executor.py next` atomically starts each admitted Bug Validator and
+returns exactly one next action; do not call `bug_validation_executor.py start`
+again for that ticket. On `host_worker`, invoke only the named
 `fm-bug-validate-worker` pass through Codex/Claude's native subagent mechanism.
 Pass the returned `job_id`, `attempt`, allowed paths, and pass name to that
 Worker; do not let it reconstruct them from a prior attempt. After preparation,
@@ -468,10 +463,35 @@ returned action at a time: a report path alone is never evidence that an
 attempt finished. Runtime errors requeue through the same state machine;
 terminal phase summaries are written by it after all Bug Validator jobs finish.
 `agent-executed` allows the Worker to choose project-scoped commands in the
-FM-Agent compatibility model. Up to two Bug Validator jobs run concurrently by
+FM-Agent compatibility model. Up to four Bug Validator jobs run concurrently by
 default; each Worker must use only its assigned attempt-local workspace and
 cache, never a project-root build output. `build_result.json` can never confirm or reject a defect. Read
 [bug-validation.md](../../references/bug-validation.md) for the full contract.
+
+## Non-skippable Bug Validation loop
+
+After Stage 8 starts, remain in this loop until it reaches one of the two
+machine-observable terminal states below. Launching a bounded group of
+background Workers is only one iteration; it is never phase completion.
+
+1. Call `durable_executor.py next`, launch every returned Worker pass, and
+   wait for every launched Worker receipt.
+2. Advance each job through exactly the returned executor action, submit its
+   receipt, and immediately call `next` to fill each available slot.
+3. If it returns `wait_for_completion_event`, wait for an existing Worker;
+   do not finalize, summarize candidates, or issue another analysis report.
+4. Only on `dag_converged`, write `scheduler.py phase-receipt --phase
+   bug_validation`; call `pipeline.py phase-complete` only when that receipt's
+   `gate_ready` is true.
+5. If a Worker lacks a usable toolchain, it must still complete its own job by
+   recording valid `unsupported/inconclusive` evidence and a receipt. The
+   Coordinator must not pre-classify all candidates as inconclusive.
+
+Calling `pipeline.py complete`, reporting any bug list, or saying that the
+analysis has concluded while Scheduler has any `queued`, `running`, or
+`retryable` Bug Validator job is a protocol violation. On an actual exhausted
+job failure, report only the gate failure through `terminal_report.py`; never
+replace it with a static-analysis summary.
 
 Only after every phase gate succeeds may the agent call `pipeline.py complete`
 and release the lock as `idle`. Never modify business source or extracted

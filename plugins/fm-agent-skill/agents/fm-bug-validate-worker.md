@@ -57,6 +57,10 @@ actual build/runtime toolchain yourself. In `adapter` mode, only the profile's
 absolute path or `..`; do not use an internal implementation file. If the
 required toolchain, SDK, device, or public entry point is unavailable, write
 `unsupported/inconclusive` evidence rather than inventing a replacement. The
+absence of `CMakeLists.txt` is not unavailable evidence for a C/C++ Makefile
+project. In `agent-executed` mode, select its Makefile command after copying
+the project into the attempt workspace; do not require CMake merely because
+the host has a `cmake` executable. The probe must be self-contained, make no network call, avoid arbitrary file I/O,
 probe must be self-contained, make no network call, avoid arbitrary file I/O,
 call only through the public entry point, catch runtime errors, and print
 exactly one first-line marker:
