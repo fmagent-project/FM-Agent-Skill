@@ -20,10 +20,11 @@ def _active(target: Path, phase: str) -> dict:
     if not isinstance(record, dict) or record.get("status") != "running":
         raise ValueError("job planning requires a running FM-Agent analysis")
     current = record.get("current_phase")
-    allowed = {current}
-    if current in {"specification", "update_specs"}:
-        allowed.update({"verification", "verify_affected", "bug_validation"})
-    if phase not in allowed:
+    # Semantic phases are strictly ordered.  Later queues must not be seeded
+    # while an earlier phase is still running; this prevents partial
+    # verification/Bug Validation results from being mistaken for a complete
+    # pipeline after a Coordinator interruption.
+    if phase != current:
         raise ValueError(f"cannot plan {phase} while earliest incomplete phase is {current}")
     if state.current_snapshot_commit(target) != record.get("snapshot_commit"):
         raise ValueError("active analysis snapshot does not match the current worktree")

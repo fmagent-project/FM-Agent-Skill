@@ -130,6 +130,9 @@ non-terminal action (`host_worker`, `wait_for_completion_event`, retry, or
 execution receipt) requires another executor call. If the Coordinator reaches
 its context or time limit, it must preserve the durable run and continue from
 `next`/`resume`; a partial Bug Validator batch is never a completed phase.
+Temporary safety-classifier or model-router unavailability is handled the same
+way: pause the exact ticket and attempt, do not duplicate-dispatch it, and
+resume later. It is not evidence of an unsupported project or a probe failure.
 
 The dynamic lifecycle is driven by `bug_validation_executor.py`, not a manual
 sequence of ad-hoc runner calls. It never invokes an Agent itself. Instead it

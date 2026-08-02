@@ -103,12 +103,18 @@ def main():
             record.update({"status": "running", "current_phase": next_phase}); record.pop("ended_at", None); record.pop("failure", None)
         elif args.action in {"phase-start", "advance"}:
             if phase not in record["phases"]: raise SystemExit("unknown phase")
+            index = record["phases"].index(phase)
+            prior = [item for item in record["phases"][:index] if record["phase_status"].get(item, {}).get("status") != "succeeded"]
+            if prior:
+                raise SystemExit("cannot start phase before prior gates pass: " + ", ".join(prior))
             if args.action == "phase-start" and record["mode"] == "full" and phase == "phase_cleanup": reset(target)
             if args.action == "phase-start" and record["mode"] == "incremental" and phase == "refresh_plan": reset_incremental_artifacts(target)
             previous = record["phase_status"].get(phase, {}); attempt = int(previous.get("attempt", 0)) + 1
             record["current_phase"] = phase; record["phase_status"][phase] = {"status": "running", "started_at": state.now(), "attempt": attempt}
         elif args.action == "phase-complete":
             if phase not in record["phases"]: raise SystemExit("unknown phase")
+            if phase != record.get("current_phase"):
+                raise SystemExit(f"cannot complete non-current phase: {phase}; current phase is {record.get('current_phase')}")
             receipt_ready, receipt_reason = phase_receipt_ready(target, phase)
             if not receipt_ready: raise SystemExit(receipt_reason)
             gate = validate(target, record["mode"], phase, record.get("inputs", {}).get("submodules", []))

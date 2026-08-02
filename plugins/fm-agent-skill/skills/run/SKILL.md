@@ -448,6 +448,10 @@ does. Run `probe_runner.py detect` only when configuration explicitly selects
 For every Bug Validator job, use the host-coordinated deterministic state
 machine; do not manually sequence its preparation, runner, finalization, or
 summary scripts. A manifest must include `input.bug_id` and `input.mode`.
+Semantic phases are strictly ordered: do not plan or start Verification until
+the Specification gate succeeds, and do not plan or start Bug Validation until
+the Verification gate succeeds. Partial downstream artifacts are retained for
+diagnostics but never constitute permission to advance the pipeline.
 `durable_executor.py next` atomically starts each admitted Bug Validator and
 returns exactly one next action; do not call `bug_validation_executor.py start`
 again for that ticket. On `host_worker`, invoke only the named
@@ -491,6 +495,13 @@ the exact continuation action (`next`/`resume`) so the next Coordinator turn
 can continue the same run. A Coordinator turn ending while any Bug Validator
 job is `queued`, `running`, or `retryable` is an interrupted run, never a
 successful phase.
+
+If the host safety classifier or model router reports temporary unavailability,
+do not launch the same Worker/attempt again and do not mark it failed. Preserve
+the durable ticket, wait or hand off to a later Coordinator turn, then resume
+that exact `job_id` and `attempt`. A classifier outage is an infrastructure
+pause, not a runtime probe result; duplicate dispatches can create conflicting
+attempt-local artifacts.
 
 After Stage 8 starts, remain in this loop until it reaches one of the two
 machine-observable terminal states below. Launching a bounded group of

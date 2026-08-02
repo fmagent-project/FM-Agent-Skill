@@ -11,6 +11,9 @@ At the start of specification, verification, or Bug Validation, the
 Coordinator calls `job_planner.py` once for the current pipeline phase. It
 creates every job in the current scope before execution; the Coordinator does
 not hand-author semantic manifests or postpone later specification layers.
+The planner rejects any phase other than the active earliest incomplete phase;
+Verification and Bug Validation cannot be seeded from partial downstream
+artifacts.
 Then obtain `scheduler.py admissible`. For each returned
 job, call `scheduler.py start` **before** invoking the host subagent. `start`
 is the admission point: it atomically rejects a job when its global or

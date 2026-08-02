@@ -826,6 +826,12 @@ def clear_run(target):
 def _activate_mismatch_jobs(target, job, outputs=None, dependencies=None):
     if job.get("type") not in {"verify_function", "verify_batch"} or (outputs is None and job.get("status") != "succeeded"):
         return []
+    # Bug Validation is planned only after the Verification phase gate.  Do
+    # not stream mismatch jobs into a still-running specification or
+    # verification phase; the deterministic bug_validation plan becomes the
+    # sole candidate/job binding point.
+    if state.active_record(target).get("current_phase") != "bug_validation":
+        return []
     record = state.active_record(target)
     created = []
     for output in outputs if outputs is not None else job.get("required_outputs", []):
