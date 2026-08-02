@@ -21,10 +21,10 @@ import scheduler
 
 SUPPORTED_PHASES = {"specification", "verification", "verify_affected"}
 WORKERS = {
-    "domain_context": "fm-domain-context-worker",
-    "spec_batch": "fm-spec-batch-worker",
-    "verify_function": "fm-verify-function-worker",
-    "verify_batch": "fm-verify-function-worker",
+    "domain_context": "fm-agent-skill:fm-domain-context-worker",
+    "spec_batch": "fm-agent-skill:fm-spec-batch-worker",
+    "verify_function": "fm-agent-skill:fm-verify-function-worker",
+    "verify_batch": "fm-agent-skill:fm-verify-function-worker",
 }
 PUBLIC_INTERFACE_SUFFIXES = {".h", ".hh", ".hpp", ".hxx", ".inc", ".inl"}
 
@@ -199,7 +199,8 @@ def _ticket(target: Path, job: dict) -> dict:
     worker = WORKERS.get(job.get("type"))
     if worker is None:
         raise ValueError(f"job type must use its dedicated executor: {job.get('type')}")
-    definition = Path(__file__).resolve().parents[1] / "agents" / f"{worker}.md"
+    definition_name = worker.split(":", 1)[-1]
+    definition = Path(__file__).resolve().parents[1] / "agents" / f"{definition_name}.md"
     if not definition.is_file():
         raise ValueError(f"registered worker definition is missing: {worker}")
     repair_artifacts, preserve_artifacts = _spec_repair_scope(target, job)

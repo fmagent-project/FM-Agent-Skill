@@ -80,17 +80,17 @@ failure) before its normal gate.
 
 | Original FM-Agent semantic worker | Skill worker | Dispatch rule |
 | --- | --- | --- |
-| phase generation | `fm-phase-plan-worker` | one job, then gate |
-| phase post-processing | `fm-phase-refine-worker` | only when needed |
-| domain context generation | `fm-domain-context-worker` | after valid phases |
-| static edge resolution without CodeGraph | `fm-agent-static-edge-worker` | one bounded candidate, then deterministic validation |
-| specification batch generation | `fm-spec-batch-worker` | same layer batches in parallel |
-| function Hoare reasoner | `fm-verify-function-worker` | one compatibility function or adaptive batch; each function writes independent A→B output |
-| Bug Validator | `fm-bug-validate-worker` | one direct `MISMATCH` per job |
-| incremental module selection | `fm-select-relevant-modules-worker` | one job |
-| incremental file selection | `fm-select-relevant-files-worker` | after module selection |
-| incremental spec update planning | `fm-incremental-spec-plan-worker` | parallel read-only plans |
-| caller reconciliation | `fm-reconcile-caller-info-worker` | one caller per job |
+| phase generation | `fm-agent-skill:fm-phase-plan-worker` | one job, then gate |
+| phase post-processing | `fm-agent-skill:fm-phase-refine-worker` | only when needed |
+| domain context generation | `fm-agent-skill:fm-domain-context-worker` | after valid phases |
+| static edge resolution without CodeGraph | `fm-agent-skill:fm-agent-static-edge-worker` | one bounded candidate, then deterministic validation |
+| specification batch generation | `fm-agent-skill:fm-spec-batch-worker` | same layer batches in parallel |
+| function Hoare reasoner | `fm-agent-skill:fm-verify-function-worker` | one compatibility function or adaptive batch; each function writes independent A→B output |
+| Bug Validator | `fm-agent-skill:fm-bug-validate-worker` | one direct `MISMATCH` per job |
+| incremental module selection | `fm-agent-skill:fm-select-relevant-modules-worker` | one job |
+| incremental file selection | `fm-agent-skill:fm-select-relevant-files-worker` | after module selection |
+| incremental spec update planning | `fm-agent-skill:fm-incremental-spec-plan-worker` | parallel read-only plans |
+| caller reconciliation | `fm-agent-skill:fm-reconcile-caller-info-worker` | one caller per job |
 
 ## Concurrency
 

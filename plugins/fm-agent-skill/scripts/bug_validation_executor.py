@@ -58,7 +58,7 @@ def worker_request(target: Path, job: dict, pass_name: str) -> dict:
     root = attempt_dir(target, bug_id, attempt).relative_to(target).as_posix()
     return {
         "action": "host_worker",
-        "worker": "fm-bug-validate-worker",
+        "worker": "fm-agent-skill:fm-bug-validate-worker",
         "pass": pass_name,
         "job_id": job["id"],
         "mode": mode,

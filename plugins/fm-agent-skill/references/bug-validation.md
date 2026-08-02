@@ -78,7 +78,7 @@ reproduction.
 For each candidate and attempt:
 
 1. Obtain a claimed `bug_validate` ticket through `durable_executor.py next`,
-   then invoke `fm-bug-validate-worker` in its
+   then invoke `fm-agent-skill:fm-bug-validate-worker` in its
    preparation pass. It writes `reproduction.json` and `probe.<ext>` under its
    assigned `fm_agent_skill/probes/<bug-id>/attempt_<n>/` directory. Do not
    call `bug_validation_executor.py start` again: the durable executor already

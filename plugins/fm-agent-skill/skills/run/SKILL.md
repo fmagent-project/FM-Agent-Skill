@@ -226,11 +226,11 @@ For specification work, read [specification-rules.md](../../references/specifica
 For verification, read [hoare-reasoning.md](../../references/hoare-reasoning.md).
 For every `MISMATCH`, read [bug-validation.md](../../references/bug-validation.md).
 
-Use the worker names exactly as follows: `fm-phase-plan-worker`, optional
-`fm-phase-refine-worker`, `fm-domain-context-worker`, `fm-spec-batch-worker`,
-`fm-agent-static-edge-worker`, `fm-verify-function-worker`, `fm-bug-validate-worker`,
-`fm-select-relevant-modules-worker`, `fm-select-relevant-files-worker`,
-`fm-incremental-spec-plan-worker`, and `fm-reconcile-caller-info-worker`.
+Use the fully qualified worker names exactly as follows: `fm-agent-skill:fm-phase-plan-worker`, optional
+`fm-agent-skill:fm-phase-refine-worker`, `fm-agent-skill:fm-domain-context-worker`, `fm-agent-skill:fm-spec-batch-worker`,
+`fm-agent-skill:fm-agent-static-edge-worker`, `fm-agent-skill:fm-verify-function-worker`, `fm-agent-skill:fm-bug-validate-worker`,
+`fm-agent-skill:fm-select-relevant-modules-worker`, `fm-agent-skill:fm-select-relevant-files-worker`,
+`fm-agent-skill:fm-incremental-spec-plan-worker`, and `fm-agent-skill:fm-reconcile-caller-info-worker`.
 Pass each worker the project path, job id, exact inputs, assigned
 outputs, and required reference files. A worker must return its concise JSON
 receipt; workers cannot spawn other workers. The Coordinator is the only
@@ -330,7 +330,7 @@ native callee info. The scheduler converts harmless legacy/identity fields at
 the boundary; it does not ask an Agent to repair metadata that the A→B reasoner
 never consumes. Every valid native B proceeds to A→B Verification.
 
-For incremental planning, give `fm-incremental-spec-plan-worker` exactly one
+For incremental planning, give `fm-agent-skill:fm-incremental-spec-plan-worker` exactly one
 assigned output: `fm_agent_skill/worker_reports/<job-id>.json`. It writes the
 full update plan there and returns only its receipt naming `plan_path`. After
 validation, serially apply that path before scheduling caller reconciliation.
@@ -389,7 +389,7 @@ original repository-relative `source_file`, so it can be checked against its
 phase. Do not merge phases unless `--one-phase` was selected. For CodeGraph,
 call `executor.py graph` with the exported control file; it records `exact`
 only after mapping exported nodes and edges to current extracted artifacts.
-Without that file, dispatch `fm-agent-static-edge-worker` first. It writes a
+Without that file, dispatch `fm-agent-skill:fm-agent-static-edge-worker` first. It writes a
 candidate below `fm_agent/`; validate and promote it, then rerun graph:
 
 ```bash
@@ -401,7 +401,7 @@ candidate below `fm_agent/`; validate and promote it, then rerun graph:
 This records `agent-static/best-effort` and makes only validated edges available
 to layer construction and incremental propagation.
 
-Immediately after `fm-phase-plan-worker` returns, normalize and validate its
+Immediately after `fm-agent-skill:fm-phase-plan-worker` returns, normalize and validate its
 output before completing `project_understanding` or `refresh_plan`:
 
 ```bash
@@ -455,7 +455,7 @@ diagnostics but never constitute permission to advance the pipeline.
 `durable_executor.py next` atomically starts each admitted Bug Validator and
 returns exactly one next action; do not call `bug_validation_executor.py start`
 again for that ticket. On `host_worker`, invoke only the named
-`fm-bug-validate-worker` pass through Codex/Claude's native subagent mechanism.
+`fm-agent-skill:fm-bug-validate-worker` pass through Codex/Claude's native subagent mechanism.
 Pass the returned `job_id`, `attempt`, allowed paths, and pass name to that
 Worker; do not let it reconstruct them from a prior attempt. After preparation,
 call `next`. In default `agent-executed` mode, process the returned `execution`
