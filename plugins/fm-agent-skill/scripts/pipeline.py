@@ -146,7 +146,12 @@ def main():
         elif args.action == "fail":
             message = failure_message(target, record, args.message)
             failure_class = "insufficient_specification" if message.startswith("insufficient_specification:") else "verification_incomplete" if message.startswith("verification_incomplete:") else record.get("failure_classification", "pipeline_failure")
-            record.update({"status": "failed", "ended_at": state.now(), "failure": message, "failure_classification": failure_class})
+            # A coordinator/session interruption is resumable.  An explicitly
+            # failed phase remains terminal so the Stop Hook can emit its
+            # incomplete terminal report instead of retrying an exhausted gate.
+            phase_record = record.get("phase_status", {}).get(phase, {})
+            terminal_phase_failure = isinstance(phase_record, dict) and phase_record.get("status") == "failed"
+            record.update({"status": "failed" if terminal_phase_failure else "interrupted", "ended_at": state.now(), "failure": message, "failure_classification": failure_class if terminal_phase_failure else "interrupted"})
             set_result_authority(target, False, message)
             checkpoint.commit(target, phase, "failed", active_record=record, message=message)
         elif args.action == "noop": record.update({"status": "noop", "ended_at": state.now(), "message": args.message})

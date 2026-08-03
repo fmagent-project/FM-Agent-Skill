@@ -206,8 +206,10 @@ small receipt as the normal fan-in. Read detailed worker artifacts only for
 listed escalations (`MISMATCH`, `DEPENDENCY_RISK`, `INCONCLUSIVE`, `ERROR`, or
 failure), then call `pipeline.py phase-complete` and emit the short completion
 status. A failed gate means do not enter the next phase. On every exception, tool failure, or user-requested stop, run
-`pipeline.py fail`; it releases its owned lock while preserving artifacts and
-the active analysis state. `pipeline.py complete` likewise releases its owned lock.
+`pipeline.py fail`; when the current phase is still running this records an
+`interrupted` resumable state, while an already recorded failed phase remains
+terminal. It releases its owned lock while preserving artifacts and the active
+analysis state. `pipeline.py complete` likewise releases its owned lock.
 Report the last completed phase and the phase that did not finish.
 
 When `pipeline.py phase-start` begins `phase_cleanup` in a `full` run, it
