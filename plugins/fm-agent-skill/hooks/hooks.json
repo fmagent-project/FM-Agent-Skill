@@ -1,0 +1,17 @@
+{
+  "description": "Prevent Claude from ending an FM-Agent Bug Validation run before its durable barrier converges.",
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/continuation_guard.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

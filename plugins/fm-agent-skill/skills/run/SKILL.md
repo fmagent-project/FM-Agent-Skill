@@ -520,6 +520,15 @@ background Workers is only one iteration; it is never phase completion.
    recording valid `unsupported/inconclusive` evidence and a receipt. The
    Coordinator must not pre-classify all candidates as inconclusive.
 
+Before reading Bug Validator reports or calling Finalize, run
+`durable_executor.py barrier --project "$PROJECT"`. Only a returned
+`dag_converged: true` permits summary generation. `wait_for_completion_event`
+means the Coordinator must wait or continue from the exact pending tickets;
+`phase_failed` means the phase gate failed and must be reported as incomplete.
+When a Stop Hook allows a `phase_failed` state, run `terminal_report.py` and
+emit only its structured phase-failure report. Do not write a success summary,
+claim `All bugs confirmed`, or call Finalize.
+
 Calling `pipeline.py complete`, reporting any bug list, or saying that the
 analysis has concluded while Scheduler has any `queued`, `running`, or
 `retryable` Bug Validator job is a protocol violation. On an actual exhausted

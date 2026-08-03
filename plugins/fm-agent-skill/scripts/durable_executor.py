@@ -70,16 +70,52 @@ def next_actions(target: Path, limit: int, offset: int = 0, turn_budget_remainin
     }
 
 
+def barrier(target: Path, phase: str = "bug_validation") -> dict:
+    """Return the machine-readable join point for a host-coordinated phase.
+
+    This never infers completion from result files.  The scheduler status is
+    authoritative; callers may read reports only after ``dag_converged``.
+    """
+    jobs = [
+        job for job in scheduler.current_jobs_for_phase(target, phase)
+        if job.get("type") == "bug_validate" and not job.get("legacy_contract")
+    ]
+    by_status = {
+        status: sum(1 for job in jobs if job.get("status") == status)
+        for status in ("queued", "running", "retryable", "failed", "succeeded")
+    }
+    pending = [
+        {"job_id": job.get("id"), "status": job.get("status"), "attempt": job.get("attempts", 0)}
+        for job in jobs if job.get("status") != "succeeded"
+    ]
+    if by_status["failed"]:
+        action = "phase_failed"
+    elif pending:
+        action = "wait_for_completion_event"
+    else:
+        action = "dag_converged"
+    return {
+        "action": action,
+        "phase": phase,
+        "dag_converged": action == "dag_converged",
+        "jobs": by_status,
+        "pending": pending,
+        "rule": "Only dag_converged permits bug_summary.py and pipeline phase-complete.",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Return bounded FM-Agent Coordinator actions.")
-    parser.add_argument("action", choices=("next", "checkpoint"))
+    parser.add_argument("action", choices=("next", "barrier", "checkpoint"))
     parser.add_argument("--project", required=True)
     parser.add_argument("--limit", type=int, default=4)
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--turn-budget-remaining", type=int)
     args = parser.parse_args(); target = project(args)
     try:
-        if args.action == "checkpoint":
+        if args.action == "barrier":
+            result = barrier(target)
+        elif args.action == "checkpoint":
             phase = earliest_incomplete(target)
             result = checkpoint.commit(target, phase, "running", active_record=state.active_record(target))
         else:

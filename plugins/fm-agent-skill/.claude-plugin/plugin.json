@@ -1,6 +1,6 @@
 {
   "name": "fm-agent-skill",
-  "version": "0.1.19",
+  "version": "0.1.27",
   "description": "Skill-guided FM-Agent correctness-analysis workflow.",
   "author": { "name": "FM-Agent" },
   "repository": "https://github.com/fmagent-project/FM-Agent",

@@ -165,6 +165,7 @@ def build(target: Path) -> dict:
         "status": "official" if official else "incomplete",
         "reason": reason,
         "snapshot_commit": checked["snapshot_commit"],
+        "analysis_fingerprint": state.active_record(target).get("fingerprint"),
         "checkpoint_head": checked["checkpoint_id"],
         "phase_manifests": [
             {
@@ -215,6 +216,17 @@ def main() -> None:
             "status": "unavailable", "reason": str(exc),
             "counts": {"verification_results": 0, "candidates": 0, "confirmed": 0, "rejected": 0, "inconclusive": 0},
         }, 2
+    # Persist the exact structured report so a Stop Hook can distinguish an
+    # intentional phase-failure report from an unverified chat summary.
+    try:
+        state.atomic_json(state.control_dir(target) / "terminal_report.json", result)
+    except OSError as exc:
+        result = {
+            "schema_version": 1, "official_result_available": False,
+            "status": "unavailable", "reason": f"could not persist terminal report: {exc}",
+            "counts": {"verification_results": 0, "candidates": 0, "confirmed": 0, "rejected": 0, "inconclusive": 0},
+        }
+        code = 2
     print(json.dumps(result, ensure_ascii=False, indent=2))
     raise SystemExit(code)
 
