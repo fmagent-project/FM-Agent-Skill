@@ -97,9 +97,12 @@ def main() -> int:
         return 0
     if active.get("status") not in {"running", "resumable", "failed", "interrupted"}:
         return block("FM-Agent Bug Validation state is invalid", "Bug Validation is current but its active run status is not resumable.")
-    database = project / "fm_agent_skill" / "checkpoint" / "state.db"
-    if not database.is_file():
-        return block("FM-Agent scheduler state is missing", "The Bug Validation state database cannot be located safely.")
+    # The scheduler ledger is deliberately durable outside the temporary
+    # snapshot (checkpoint.root() resolves the source project from the
+    # validated isolation marker).  Do not inspect a guessed path inside the
+    # snapshot: doing so produces a false "state missing" error even while
+    # the barrier can safely locate the source ledger.  A missing/corrupt
+    # ledger is still a hard stop because the barrier below rejects it.
     barrier = Path(plugin_root) / "scripts" / "durable_executor.py"
     try:
         completed = subprocess.run(
