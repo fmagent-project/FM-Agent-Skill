@@ -217,13 +217,18 @@ def _ticket(target: Path, job: dict) -> dict:
         "job_manifest": f"fm_agent_skill/jobs/{job['id']}.json",
         "read_paths": _read_paths(target, job),
         "write_paths": list(job.get("required_outputs", [])),
+        # Keep the contract unambiguous for host workers: `outputs` in the
+        # compact receipt must equal this exact list, byte-for-byte and in
+        # order.  `write_paths` remains the compatibility spelling.
+        "required_outputs": list(job.get("required_outputs", [])),
     }
     if job.get("type") == "spec_batch":
         ticket.update({
             "repair_artifacts": repair_artifacts,
             "preserve_artifacts": preserve_artifacts,
-            "validation_message": job.get("message") if job.get("attempts", 0) else None,
         })
+    if job.get("attempts", 0):
+        ticket["validation_message"] = job.get("message") or "Previous receipt/artifact validation failed; return outputs exactly equal to required_outputs."
     path = state.control_dir(target) / "dispatches" / f"{job['id']}.json"
     state.atomic_json(path, ticket)
     return {"ticket_path": path.relative_to(target).as_posix(), **ticket}

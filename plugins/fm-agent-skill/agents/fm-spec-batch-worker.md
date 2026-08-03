@@ -54,5 +54,7 @@ valid pair, and repair every listed rejected pair in the same pass.
 
 Do not change the source copy. Do not write `fm_agent_skill/`, business source,
 or another Worker's sidecars; do not spawn agents. Return JSON with `job_id`,
-`status`, and `outputs` exactly equal to the dispatch ticket's `write_paths`;
-do not add completed artifact paths as another receipt field.
+`status`, and `outputs` exactly equal, in order, to the dispatch ticket's
+`required_outputs` (also exposed as `write_paths`); do not add completed
+artifact paths as another receipt field. On retry, read and correct
+`validation_message` before returning.
