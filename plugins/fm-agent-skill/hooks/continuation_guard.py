@@ -23,7 +23,7 @@ def resolve_project(project: Path) -> tuple[Path | None, str | None]:
     """Resolve the active snapshot, accepting only our private /tmp shape."""
     marker_path = project / "fm_agent_skill" / "isolation.json"
     if not marker_path.is_file():
-        return project, None
+        return None, "isolation marker is missing"
     try:
         marker = json.loads(marker_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -60,6 +60,23 @@ def main() -> int:
         output("approve", "FM-Agent project context is unavailable", "No active FM-Agent project context was found.")
         return 0
     project = Path(project_value).expanduser().resolve()
+    # Ordinary Claude projects have no FM-Agent marker and must remain
+    # stoppable.  Once an active Bug Validation run is present, however,
+    # missing isolation metadata is a safety error, not a fallback to the
+    # original project directory.
+    source_active_path = project / "fm_agent_skill" / "active.json"
+    source_active = {}
+    if source_active_path.is_file():
+        try:
+            source_active = json.loads(source_active_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return block("FM-Agent active state is unreadable", f"Cannot inspect the active run before resolving isolation: {exc}")
+    marker_path = project / "fm_agent_skill" / "isolation.json"
+    if not marker_path.is_file():
+        if isinstance(source_active, dict) and source_active.get("current_phase") == "bug_validation":
+            return block("FM-Agent isolation marker is missing", "Bug Validation is active but fm_agent_skill/isolation.json is missing; refusing to inspect or stop against the original project.")
+        output("approve", "no active isolated FM-Agent run", "No active isolated FM-Agent run requires continuation.")
+        return 0
     project, resolve_error = resolve_project(project)
     if resolve_error:
         return block("FM-Agent snapshot validation failed", resolve_error)
