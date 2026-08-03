@@ -153,12 +153,23 @@ def build(target: Path) -> dict:
     confirmed = [item for item in bug_results if item["status"] == "confirmed"]
     rejected = [item for item in bug_results if item["status"] == "rejected"]
     inconclusive = [item for item in bug_results if item["status"] == "inconclusive"]
+    bv_function_ids = {item["function_id"] for item in bug_results}
+    # MISMATCH with no Bug Validation result is a static finding, not
+    # inconclusive.  It carries its concrete counterexample and source quote
+    # from the Verification Worker.
+    static_finding_ids = mismatches - bv_function_ids
+    static_findings = [
+        {"function_id": fid, "status": "static_finding",
+         "interpretation": "high-confidence static identification with concrete counterexample and exact source quote; not dynamically confirmed"}
+        for fid in sorted(static_finding_ids)
+    ]
     official, reason = official_result_available(target)
     # Never report partial dynamic evidence as confirmed bugs. It remains in
     # the durable attempt artifacts for a later accepted completion.
     report_confirmed = confirmed if official else []
     report_rejected = rejected if official else []
     report_inconclusive = inconclusive if official else []
+    report_static = static_findings if official else []
     report = {
         "schema_version": 1,
         "official_result_available": official,
@@ -177,16 +188,15 @@ def build(target: Path) -> dict:
         "counts": {
             "verification_results": len(verification),
             "candidates": len(mismatches),
+            "static_findings": len(report_static),
             "confirmed": len(report_confirmed),
             "rejected": len(report_rejected),
-            "inconclusive": (
-                len(report_inconclusive) + len(mismatches - {item["function_id"] for item in bug_results})
-                if official else len(mismatches)
-            ),
+            "inconclusive": len(report_inconclusive),
         },
         "authority_rules": {
             "candidate_requires_schema_valid_mismatch": True,
             "confirmed_requires_dynamic_evidence": True,
+            "static_finding_is_not_confirmed": True,
             "specification_is_not_bug_evidence": True,
             "rejected_is_not_absence_proof": True,
             "inconclusive_retains_dynamic_evidence_reason": True,
@@ -197,6 +207,7 @@ def build(target: Path) -> dict:
     if official:
         report["findings"] = {
             "candidates": sorted(mismatches),
+            "static_findings": report_static,
             "confirmed": report_confirmed,
             "rejected": report_rejected,
             "inconclusive": report_inconclusive,

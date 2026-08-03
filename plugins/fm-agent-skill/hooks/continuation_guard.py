@@ -166,6 +166,24 @@ def main() -> int:
         output("approve", "FM-Agent run is terminal", "No active FM-Agent phase requires continuation.")
         return 0
     if phase != "bug_validation":
+        # Stages 1–7 are streaming.  In a normal run pipeline.py complete
+        # sets status=idle after the final stage-7 gate, so
+        # requires_continuation already returns False at line 166 and we
+        # never reach here.  Reaching here means the phase itself is still
+        # active — launch the native CLI to continue it.
+        # Before continuing, verify no stale Bug Validation jobs are lurking
+        # from a prior interrupted batched run.
+        barrier = Path(plugin_root) / "scripts" / "durable_executor.py"
+        try:
+            completed = subprocess.run(
+                [sys.executable, str(barrier), "barrier", "--project", str(project)],
+                text=True, capture_output=True, timeout=20, check=False,
+            )
+            bv_data = json.loads(completed.stdout) if completed.stdout.strip() else {}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            bv_data = {}
+        if isinstance(bv_data, dict) and bv_data.get("action") not in {"dag_converged", "noop", None} and not (bv_data.get("dag_converged") is True and not bv_data.get("pending")):
+            return block("FM-Agent stale Bug Validation jobs exist", "A prior Bug Validation run has unfinished jobs; resume or explicitly fail that phase before starting a new run.")
         return continuation_decision(plugin_root, source_project, stop_hook_active, hook_session_id)
     # The scheduler ledger is deliberately durable outside the temporary
     # snapshot (checkpoint.root() resolves the source project from the
@@ -185,7 +203,7 @@ def main() -> int:
     if completed.returncode != 0 or not isinstance(data, dict):
         return block("FM-Agent barrier returned an error", data.get("error", "The barrier returned invalid state.") if isinstance(data, dict) else "invalid barrier output")
     action = data.get("action")
-    if phase == "bug_validation" and action in {"wait_for_completion_event", "dispatch"} or phase == "bug_validation" and data.get("dag_converged") is False:
+    if phase == "bug_validation" and (action in {"wait_for_completion_event", "dispatch"} or data.get("dag_converged") is False):
         return continuation_decision(plugin_root, source_project, stop_hook_active, hook_session_id)
     if action == "phase_failed":
         report_path = project / "fm_agent_skill" / "control" / "terminal_report.json"
@@ -205,6 +223,9 @@ def main() -> int:
         return block("phase_failed report is stale or incomplete", "Run terminal_report.py for the current snapshot and analysis instance; persist status=incomplete before stopping.")
     if phase == "bug_validation" and action == "dag_converged" and data.get("dag_converged") is True and not data.get("pending"):
         output("approve", "Bug Validation barrier converged", "All Bug Validator jobs reached a legal terminal state.")
+        return 0
+    if phase == "bug_validation" and action == "noop":
+        output("approve", "Bug Validation was never started", "No Bug Validation jobs were created; the analysis completed with static findings only.")
         return 0
     if phase == "bug_validation" and action not in {"phase_failed"}:
         return block("FM-Agent barrier is non-terminal or malformed", "Only dag_converged permits Bug Validation to end; preserve the current job_id and attempt.")

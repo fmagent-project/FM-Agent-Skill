@@ -13,8 +13,18 @@ automatically written intent. Every selection must be recorded in
 6. `select_scope`: run `executor.py select --project "$PROJECT"` for the deterministic changed-function seed. Then use `fm-agent-skill:fm-select-relevant-modules-worker` and `fm-agent-skill:fm-select-relevant-files-worker` to add caller/callee propagation. After validating each file-selector record, merge it with `incremental.py merge-selection --record <record> --reason caller-propagation` (or its actual propagation reason); the control decision records why every indexed function is included or excluded.
 7. `update_specs`: run `executor.py restore-specs --project "$PROJECT"` to recover only unchanged paired sidecars. Dispatch read-only `fm-agent-skill:fm-incremental-spec-plan-worker` jobs for selected independent functions; persist each accepted response and call `incremental.py apply-plan --plan <plan>` serially. Then dispatch one `fm-agent-skill:fm-reconcile-caller-info-worker` per caller frontier. The apply tool writes native `fm_agent/incremental_updated_specs.json`.
 8. `verify_affected`: dispatch `fm-agent-skill:fm-verify-function-worker` jobs for selected functions. Each job repeats the structured actual-postcondition A versus specification B check for the current snapshot; use `DEPENDENCY_RISK` rather than converting a callee's direct mismatch into a caller mismatch. Retained schema-v1 or otherwise malformed verification results invalidate the baseline instead of becoming Bug Validator candidates.
-9. `bug_validation`: dispatch `fm-agent-skill:fm-bug-validate-worker` only for selected direct `MISMATCH` candidates. The worker first designs a public-entrypoint probe; the Coordinator records optional build evidence with `probe_runner.py`, executes the reviewed probe with `reproduction_runner.py`, then asks the worker to finalize its result. Only the latter dynamic result can confirm or reject a candidate. Overwrite the current `fm_agent/bug_validation/summary.json`; incremental cleanup removes older reports and probes before this phase.
-10. `finalize`: gate all retained and selected artifacts, then save the new baseline.
+9. `bug_validation` *(optional)*: skipped by default.  Dispatch
+   `fm-agent-skill:fm-bug-validate-worker` only when the user supplies
+   `--validate FUNCTION_ID` for a selected direct `MISMATCH` candidate. The
+   worker first designs a public-entrypoint probe; the Coordinator records
+   optional build evidence with `probe_runner.py`, executes the reviewed probe
+   with `reproduction_runner.py`, then asks the worker to finalize its result.
+   Only the latter dynamic result can confirm or reject a candidate. Overwrite
+   the current `fm_agent/bug_validation/summary.json`; incremental cleanup
+   removes older reports and probes before this phase.
+10. `finalize`: gate all retained and selected artifacts, then save the new
+    baseline.  When `bug_validation` was skipped, report every schema-v2
+    `MISMATCH` as `confirmation_status: static_finding`.
 
 Deleted functions must be absent from the Skill control analysis index, extracted artifacts,
 required result mapping, and retained-spec mapping. A stale or malformed

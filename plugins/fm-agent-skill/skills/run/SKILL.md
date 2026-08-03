@@ -51,6 +51,7 @@ it may pass the following arguments to the same workflow:
 [natural-language change note]
   [--submodule path ...] [--one-phase]
   [--extra-edge file-or-dir] [--knowledge file ...] [--resume]
+  [--validate function-id]
 ```
 
 Treat all text not matching an option as the change note. Resolve paths relative
@@ -69,6 +70,12 @@ natural-language change note:
 - `--extra-edge FILE_OR_DIR`
 - `--one-phase`
 - `--resume`
+- `--validate FUNCTION_ID`
+
+`--validate` requires a completed baseline with existing verification results.
+It runs only Bug Validation for the named function's MISMATCH candidate without
+repeating earlier stages.  It is incompatible with a new change note,
+`--submodule`, `--knowledge`, `--extra-edge`, and `--one-phase`.
 
 All remaining text is the change note. Preserve every option value and pass
 each option separately. First perform this read-only inspection. It never
@@ -128,8 +135,46 @@ when missing or invalid. If an already-completed graph phase is valid, do not
 touch `.codegraph/`. Never silently replace a CodeGraph-selected resumed run
 with `agent-static`.
 
-Without `--resume`, ordinary `dispatch` automatically continues a compatible
-checkpoint; no manual flag is required.
+### On-demand Bug Validation
+
+`--validate FUNCTION_ID` runs dynamic Bug Validation for a single function that
+already has a schema-v2 `MISMATCH` result from a completed analysis baseline.
+It never starts a fresh analysis, creates a new snapshot, or repeats earlier
+stages.  It is mutually exclusive with `--submodule`, `--knowledge`,
+`--extra-edge`, `--one-phase`, `--resume`, and a new change note.
+
+First verify the baseline and locate the candidate:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/orchestrate.py" validate-inspect \
+  --project "$PROJECT" --function-id "$FUNCTION_ID"
+```
+
+If this returns an error (missing baseline, no MISMATCH for that function,
+already confirmed, or an active conflicting lock), report its reason and stop.
+
+On success, dispatch exactly one Bug Validation job for that function:
+
+```bash
+<python3> "$FM_AGENT_SKILL_ROOT/scripts/orchestrate.py" validate-dispatch \
+  --project "$PROJECT" --function-id "$FUNCTION_ID"
+```
+
+This creates a private snapshot from the saved baseline commit and returns
+`project`, `job_id`, and `config`.  Then enter the standard single-function
+Bug Validation loop below, starting from `durable_executor.py next`.  A single
+function with at most `bug_validation_max_attempts` probes (default 5) and
+`bug_validation_negative_retries + 1` negative attempts (default 3) is bounded
+enough to complete in one turn under normal conditions.
+
+On `dag_converged`, run `bug_summary.py` to update the summary, then report
+only that function's result (`confirmed`, `rejected`, or `inconclusive`).  Do
+not re-report static findings from the baseline.
+
+### Ordinary analysis (stages 1–7)
+
+Without `--resume` or `--validate`, ordinary `dispatch` automatically continues
+a compatible checkpoint; no manual flag is required.
 
 If inspection returns `noop`, report a user-visible no-op status and its
 baseline commit, then finish. Do not run `codegraph.py status` or dispatch a
@@ -301,6 +346,12 @@ workers than returned tickets.
 
 Replace `<HOST_SLOTS>` with a positive integer no larger than the host's
 currently available native subagent slots or the configured phase cap.
+The default global cap is 16 (`max_active_subagents`); each phase type has
+its own concurrency limit: specification batches 6, verification 12, Bug
+Validation 4, incremental plans 4, and all other workers 1 each. Use the
+tightest applicable bound: for specification, `min(<available subagents>,
+6)`, and for Bug Validation, `min(<available subagents>, 4)`. It is never
+an error to use a smaller number when fewer host slots are free.
 
 Submit semantic receipts only through:
 
@@ -474,117 +525,129 @@ default; each Worker must use only its assigned attempt-local workspace and
 cache, never a project-root build output. `build_result.json` can never confirm or reject a defect. Read
 [bug-validation.md](../../references/bug-validation.md) for the full contract.
 
-## Non-skippable Bug Validation loop
+## Optional Bug Validation
 
-### Coordinator non-termination guard
+### Default: complete after verification
 
-The Coordinator must treat every non-terminal executor response as a
-continuation request, not as a reason to summarize. In particular:
+Bug Validation (Stage 8) is **optional**.  After stages 1–7 succeed, the
+Coordinator must **not** automatically enter Bug Validation against a batch
+of MISMATCH candidates.  Instead it skips from the `verification` gate directly
+to `finalize` and reports every schema-v2 `MISMATCH` as a **static finding**,
+not as a confirmed defect.  A static finding carries its concrete
+counterexample, exact offending source quote, and A→B reasoning chain from
+the Verification Worker; it is a high-confidence identification, not a
+guess.  The terminal report labels each such function
+`confirmation_status: static_finding` and enumerates zero confirmed,
+rejected, or inconclusive dynamic results.
+
+`pipeline.py complete` after stage 7 is a legal terminal state.  The Stop Hook
+must allow the run to stop without launching a continuation supervisor when
+every stage-7 gate has passed, the schedule contains no `queued`, `running`, or
+`retryable` Bug Validator job, and the durable barrier returns
+`dag_converged` or `noop`.  Do not call `durable_executor.py next` or
+`durable_executor.py barrier` before finalize when Bug Validation was never
+started.
+
+### On-demand Bug Validation via --validate
+
+When the user supplies `--validate FUNCTION_ID`, the Coordinator runs Bug
+Validation **only** for that function's existing MISMATCH candidate.  It must
+still follow the full state-machine loop because a single function can require
+multiple attempts:
+
+1. Call `durable_executor.py next --limit 1`, launch the returned Worker pass
+   for that single job, and submit the receipt.
+2. Advance through exactly the returned executor action — `host_worker`,
+   `wait_for_completion_event`, `submit_agent_execution`, or
+   `scheduler_retry` — and immediately call `next` again.
+3. Continue until the executor returns `dag_converged` for that job or an
+   explicit exhausted-job failure.
+4. Run `scheduler.py phase-receipt --phase bug_validation` and call
+   `pipeline.py phase-complete` only when `dag_converged` and `gate_ready`.
+
+A single-function validation with at most 5 runtime attempts × 3 negative
+probes is bounded enough to complete in one turn.  If the host reaches a
+context or tool-call limit mid-validation, checkpoint the durable state and
+let the next ordinary run or explicit `--resume` continue that exact job id
+and attempt.
+
+### Coordinator non-termination guard (active Bug Validation only)
+
+When Bug Validation **is** running (either a legacy batched run or an active
+`--validate` job), the Coordinator must treat every non-terminal executor
+response as a continuation request:
 
 - `host_worker`, `wait_for_completion_event`, `scheduler_retry`, and
   `submit_agent_execution` are **not** terminal responses;
-- a background-worker batch is not a phase boundary;
 - a report file, a confirmed subset, or a static `inconclusive` explanation is
   not evidence that a job finished;
 - never stop because the analysis is taking a long time or because one batch
   has completed.
 
 After each response, persist the compact job id/attempt receipt, immediately
-call the executor again, and continue until it returns `dag_converged` or an
-explicit exhausted-job failure. If the host is approaching a context or
-execution limit, do not summarize: leave the durable state intact and return
-the exact continuation action (`next`/`resume`) so the next Coordinator turn
-can continue the same run. A Coordinator turn ending while any Bug Validator
-job is `queued`, `running`, or `retryable` is an interrupted run, never a
-successful phase.
+call the executor again, and continue until `dag_converged` or an explicit
+exhausted-job failure.  If the host is approaching a context or execution
+limit, do not summarize: leave the durable state intact and return the exact
+continuation action so the next Coordinator turn can continue the same run.
 
 If the host safety classifier or model router reports temporary unavailability,
 do not launch the same Worker/attempt again and do not mark it failed. Preserve
 the durable ticket, wait or hand off to a later Coordinator turn, then resume
-that exact `job_id` and `attempt`. A classifier outage is an infrastructure
-pause, not a runtime probe result; duplicate dispatches can create conflicting
-attempt-local artifacts.
+that exact `job_id` and `attempt`.
 
-### Coordinator turn boundaries
+The Stop Hook for active Bug Validation writes a durable continuation ticket.
+On hook re-entry, `hooks/continuation_supervisor.py` may launch the installed
+native Claude/Codex CLI and only then approve the current stop.  When Bug
+Validation is not active (no queued/running/retryable BV jobs), the Stop Hook
+approves the stop directly without launching a supervisor.
 
-Stages 6 (`specification`), 7 (`verification`), and 8 (`bug_validation`) are
-streaming DAGs and may require more than one Claude turn. Reaching a host
-context, tool-call, or worker-time limit is an interrupted run, never phase
-completion and never a successful analysis. Before yielding for such a limit,
-call `durable_executor.py checkpoint` while the private snapshot is still
-available and report the exact current phase and pending action. The next turn
-must invoke the normal `run` entry point with no new change note, or explicit
-`--resume`; it must reclaim the same checkpoint and continue the first
-incomplete job. Do not create a new dispatch, reset artifacts, summarize
-partial results, or call `pipeline.py complete` at a turn boundary.
+### Bug Validation loop (single or legacy batch)
 
-The Stop Hook writes a durable continuation ticket. On hook re-entry,
-`hooks/continuation_supervisor.py` may launch the installed native Claude/Codex
-CLI (`--resume <session-id>` when supplied, otherwise the validated
-`claude --continue` or `codex resume --last` fallback) and only then approve the
-current stop. It never calls a model SDK or API. If the native CLI is absent or
-fails, the hook remains blocking and the ticket is resumed by the next ordinary
-run. `stop_hook_active=true` is never a blanket approval path.
-
-After Stage 8 starts, remain in this loop until it reaches one of the two
-machine-observable terminal states below. Launching a bounded group of
-background Workers is only one iteration; it is never phase completion.
+When Bug Validation is active, remain in this loop:
 
 1. Call `durable_executor.py next`, launch every returned Worker pass, and
    wait for every launched Worker receipt.
 2. Advance each job through exactly the returned executor action, submit its
    receipt, and immediately call `next` to fill each available slot.
 3. If it returns `wait_for_completion_event`, wait for an existing Worker;
-   do not finalize, summarize candidates, or issue another analysis report.
+   do not finalize or issue another analysis report.
 4. Only on `dag_converged`, write `scheduler.py phase-receipt --phase
-   bug_validation`; call `pipeline.py phase-complete` only when that receipt's
-   `gate_ready` is true.
-5. If a Worker lacks a usable toolchain, it must still complete its own job by
-   recording valid `unsupported/inconclusive` evidence and a receipt. The
-   Coordinator must not pre-classify all candidates as inconclusive.
+   bug_validation`; call `pipeline.py phase-complete` when `gate_ready`.
+5. If a Worker lacks a usable toolchain, it must still complete its own job
+   by recording valid `unsupported/inconclusive` evidence and a receipt.
 
-Before reading Bug Validator reports or calling Finalize, run
-`durable_executor.py barrier --project "$PROJECT"`. Only a returned
-`dag_converged: true` permits summary generation. `wait_for_completion_event`
-means the Coordinator must wait or continue from the exact pending tickets;
-`phase_failed` means the phase gate failed and must be reported as incomplete.
-When a Stop Hook allows a `phase_failed` state, run `terminal_report.py` and
-emit only its structured phase-failure report. Do not write a success summary,
-claim `All bugs confirmed`, or call Finalize.
+Before reading Bug Validator reports or calling Finalize after an active Bug
+Validation run, call `durable_executor.py barrier --project "$PROJECT"`.
+Only `dag_converged: true` permits summary generation.
+`wait_for_completion_event` means the Coordinator must wait or continue from
+the exact pending tickets; `phase_failed` means the phase gate failed and
+must be reported as incomplete.
 
-Calling `pipeline.py complete`, reporting any bug list, or saying that the
+Calling `pipeline.py complete`, reporting any bug list, or claiming the
 analysis has concluded while Scheduler has any `queued`, `running`, or
-`retryable` Bug Validator job is a protocol violation. On an actual exhausted
-job failure, report only the gate failure through `terminal_report.py`; never
-replace it with a static-analysis summary.
+`retryable` Bug Validator job is a protocol violation.
 
-Only after every phase gate succeeds may the agent call `pipeline.py complete`
-and release the lock as `idle`. Never modify business source or extracted
-function copies; write specifications only to their `.spec.json` and
-`.info.json` sidecars. Do not expose raw full diffs in chat. Execute and describe only
-capabilities documented by this Skill's shared instructions and references; do not
-infer features from the original FM-Agent project.
+### Terminal report and findings
+
+Immediately before any terminal user report, run `terminal_report.py --project`
+on the original user worktree.  Generate the response only from its structured
+output; never supplement its findings.  If `official_result_available` is false,
+report only the incomplete state and reason.
+
+A function may appear under **confirmed bugs** only when its direct `MISMATCH`
+has a `bug_validation/*.result.json` whose status is `confirmed` and whose
+latest attempt names matching dynamic evidence.  A function with a schema-v2
+Verification `MISMATCH` but no Bug Validation result is a **static finding**
+(`confirmation_status: static_finding`) — it carries a concrete counterexample
+and exact source quote, but has not been dynamically reproduced.  Report static
+findings and confirmed bugs in separate sections; never relabel a static finding
+as confirmed.  Never relabel specification text, implementation observations,
+source comments, benchmark manifests, or host suspicions as discovered bugs.
 
 If any phase exhausts its retries or fails its gate, the FM-Agent analysis is
 incomplete. Record `phase-fail`, call `pipeline.py fail`, and stop the analysis
 workflow. Do not switch to direct source auditing, ad-hoc bug hunting, manual
-test execution, or an alternative report in the same run. Such observations
-would not have passed specification, verification, and Bug Validator gates and
-must never be presented as FM-Agent findings. The final response for a failed
-run contains only the completed phase, failed phase, exact scheduler/gate
-reason, and retained automatic-continuation location. `--resume` is optional
-diagnostic syntax, not a required user recovery step.
-
-Build the final user report only from validated current-run artifacts. A
-function may appear under confirmed bugs only when its direct `MISMATCH` has a
-`bug_validation/*.result.json` whose status is `confirmed` and whose latest
-attempt names matching dynamic evidence. Never relabel specification text,
-implementation observations, source comments, benchmark manifests, or host
-suspicions as discovered bugs. If there are no direct `MISMATCH` results,
-report zero candidates and zero confirmed bugs; external benchmark ground
-truth belongs in a separate evaluator section.
-
-Immediately before any terminal user report, run `terminal_report.py --project`
-on the original user worktree. Generate the response only from its structured
-output; never supplement its findings. If `official_result_available` is false,
-report only the incomplete state and reason.
+test execution, or an alternative report in the same run. The final response for
+a failed run contains only the completed phase, failed phase, exact
+scheduler/gate reason, and retained automatic-continuation location. `--resume`
+is optional diagnostic syntax, not a required user recovery step.
