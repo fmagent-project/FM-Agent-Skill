@@ -10,13 +10,82 @@ import sys
 import tempfile
 
 
+# These states mean that the Coordinator still owns an unfinished run.  A
+# failed phase is deliberately excluded: pipeline.py fail() has already made
+# that run terminal and the user must be allowed to inspect the failure.
+CONTINUABLE_STATUSES = frozenset({"running", "resumable", "interrupted"})
+
+
+def requires_continuation(active: object) -> bool:
+    """Return whether an active record still represents unfinished work."""
+    return isinstance(active, dict) and active.get("status") in CONTINUABLE_STATUSES
+
+
 def output(decision: str, reason: str, message: str) -> None:
     print(json.dumps({"decision": decision, "reason": reason, "systemMessage": message}, ensure_ascii=False))
+
+
+def read_json(path: Path, default: object) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
 
 
 def block(reason: str, message: str) -> int:
     output("block", reason, message)
     return 0
+
+
+def supervisor_call(plugin_root: str, action: str, project: Path, session_id: str | None = None) -> dict:
+    supervisor = Path(plugin_root) / "hooks" / "continuation_supervisor.py"
+    if not supervisor.is_file():
+        return {"status": "failed", "reason": "continuation supervisor is missing"}
+    try:
+        command = [sys.executable, str(supervisor), action, "--project", str(project)]
+        if session_id:
+            command.extend(["--session-id", session_id])
+        completed = subprocess.run(
+            command,
+            text=True, capture_output=True, timeout=20, check=False,
+        )
+        value = json.loads(completed.stdout) if completed.stdout.strip() else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        return {"status": "failed", "reason": f"continuation supervisor failed: {exc}"}
+    if completed.returncode != 0 or not isinstance(value, dict):
+        return {"status": "failed", "reason": value.get("reason", "continuation supervisor returned invalid state") if isinstance(value, dict) else "invalid supervisor output"}
+    return value
+
+
+def continuation_decision(plugin_root: str, project: Path, stop_hook_active: bool, session_id: str | None = None) -> int:
+    """Create/launch one native-host continuation and report the hook result."""
+    supervisor = supervisor_call(plugin_root, "launch" if stop_hook_active else "ensure", project, session_id)
+    if stop_hook_active and supervisor.get("status") in {"started", "launched"}:
+        output("approve", "Native continuation supervisor accepted", "The next turn was handed to the installed Claude/Codex CLI; the durable checkpoint remains authoritative.")
+        return 0
+    if supervisor.get("status") in {"pending", "starting", "launching"}:
+        return block("FM-Agent continuation ticket is pending", "The host continuation supervisor must launch the next native Claude/Codex turn before this run may stop.")
+    return block("FM-Agent continuation could not be accepted", str(supervisor.get("reason", "native continuation was not launched")))
+
+
+def source_active_record(project: Path) -> dict:
+    """Find durable active state even when the disposable marker was deleted."""
+    candidates = (
+        project / "fm_agent_skill" / "active.json",
+        project / "fm_agent_skill" / "checkpoint" / "active.json",
+        project / "fm_agent" / "analysis_status.json",
+    )
+    for path in candidates:
+        if not path.is_file():
+            continue
+        value = read_json(path, None)
+        if value is None:
+            return {"__invalid__": True, "__path__": str(path)}
+        if isinstance(value, dict) and value:
+            if value.get("status") == "in_progress":
+                value = {**value, "status": "running"}
+            return value
+    return {}
 
 
 def resolve_project(project: Path) -> tuple[Path | None, str | None]:
@@ -44,37 +113,37 @@ def resolve_project(project: Path) -> tuple[Path | None, str | None]:
 
 
 def main() -> int:
-    # Claude may re-enter Stop hooks after a blocking decision. Honor the
-    # marker once to prevent an infinite hook loop; the durable barrier remains
-    # authoritative for the next Coordinator turn.
     try:
         hook_input = json.load(sys.stdin)
     except (ValueError, OSError):
         hook_input = {}
-    if isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True:
-        output("approve", "Stop hook recursion guard", "Stop hook already blocked this turn; preserve the durable run for the next continuation turn.")
-        return 0
+    stop_hook_active = isinstance(hook_input, dict) and hook_input.get("stop_hook_active") is True
+    hook_session_id = None
+    if isinstance(hook_input, dict):
+        for key in ("session_id", "sessionId", "conversation_id", "conversationId"):
+            if isinstance(hook_input.get(key), str) and hook_input[key]:
+                hook_session_id = hook_input[key]
+                break
+        session = hook_input.get("session")
+        if hook_session_id is None and isinstance(session, dict) and isinstance(session.get("id"), str):
+            hook_session_id = session["id"]
     project_value = os.environ.get("CLAUDE_PROJECT_DIR")
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if not project_value or not plugin_root:
         output("approve", "FM-Agent project context is unavailable", "No active FM-Agent project context was found.")
         return 0
-    project = Path(project_value).expanduser().resolve()
-    # Ordinary Claude projects have no FM-Agent marker and must remain
-    # stoppable.  Once an active Bug Validation run is present, however,
-    # missing isolation metadata is a safety error, not a fallback to the
-    # original project directory.
-    source_active_path = project / "fm_agent_skill" / "active.json"
-    source_active = {}
-    if source_active_path.is_file():
-        try:
-            source_active = json.loads(source_active_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            return block("FM-Agent active state is unreadable", f"Cannot inspect the active run before resolving isolation: {exc}")
+    source_project = Path(project_value).expanduser().resolve()
+    project = source_project
+    # Ordinary Claude projects have no FM-Agent marker and remain stoppable.
+    # Every continuable FM-Agent phase, however, requires isolation metadata;
+    # never fall back to the original project directory.
+    source_active = source_active_record(project)
+    if source_active.get("__invalid__"):
+        return block("FM-Agent active state is unreadable", "Cannot inspect durable active state before resolving isolation: " + source_active.get("__path__", "unknown"))
     marker_path = project / "fm_agent_skill" / "isolation.json"
     if not marker_path.is_file():
-        if isinstance(source_active, dict) and source_active.get("current_phase") == "bug_validation":
-            return block("FM-Agent isolation marker is missing", "Bug Validation is active but fm_agent_skill/isolation.json is missing; refusing to inspect or stop against the original project.")
+        if requires_continuation(source_active):
+            return block("FM-Agent isolation marker is missing", "An unfinished FM-Agent run has no fm_agent_skill/isolation.json; refusing to inspect or stop against the original project.")
         output("approve", "no active isolated FM-Agent run", "No active isolated FM-Agent run requires continuation.")
         return 0
     project, resolve_error = resolve_project(project)
@@ -92,11 +161,12 @@ def main() -> int:
         return block("FM-Agent active state is unreadable", "The active analysis state is damaged; do not stop until it is diagnosed.")
     if not isinstance(active, dict):
         return block("FM-Agent active state is invalid", "The active analysis state is not a JSON object.")
-    if active.get("current_phase") != "bug_validation":
-        output("approve", "Bug Validation is not the current phase", "The current FM-Agent phase does not require the Bug Validation barrier.")
+    phase = active.get("current_phase")
+    if not requires_continuation(active):
+        output("approve", "FM-Agent run is terminal", "No active FM-Agent phase requires continuation.")
         return 0
-    if active.get("status") not in {"running", "resumable", "failed", "interrupted"}:
-        return block("FM-Agent Bug Validation state is invalid", "Bug Validation is current but its active run status is not resumable.")
+    if phase != "bug_validation":
+        return continuation_decision(plugin_root, source_project, stop_hook_active, hook_session_id)
     # The scheduler ledger is deliberately durable outside the temporary
     # snapshot (checkpoint.root() resolves the source project from the
     # validated isolation marker).  Do not inspect a guessed path inside the
@@ -115,15 +185,8 @@ def main() -> int:
     if completed.returncode != 0 or not isinstance(data, dict):
         return block("FM-Agent barrier returned an error", data.get("error", "The barrier returned invalid state.") if isinstance(data, dict) else "invalid barrier output")
     action = data.get("action")
-    if action in {"wait_for_completion_event", "dispatch"} or data.get("dag_converged") is False:
-        pending = data.get("pending", [])
-        output(
-            "block",
-            "Bug Validation is not converged",
-            "Do not stop the FM-Agent run. Continue the exact pending Bug Validator tickets, submit their receipts, and re-run durable_executor.py barrier. Pending: "
-            + json.dumps(pending, ensure_ascii=False),
-        )
-        return 0
+    if phase == "bug_validation" and action in {"wait_for_completion_event", "dispatch"} or phase == "bug_validation" and data.get("dag_converged") is False:
+        return continuation_decision(plugin_root, source_project, stop_hook_active, hook_session_id)
     if action == "phase_failed":
         report_path = project / "fm_agent_skill" / "control" / "terminal_report.json"
         try:
@@ -140,10 +203,17 @@ def main() -> int:
             output("approve", "Bug Validation exhausted its retry budget", "An incomplete phase-failure report is persisted; stop and report only that failure.")
             return 0
         return block("phase_failed report is stale or incomplete", "Run terminal_report.py for the current snapshot and analysis instance; persist status=incomplete before stopping.")
-    if action == "dag_converged" and data.get("dag_converged") is True and not data.get("pending"):
+    if phase == "bug_validation" and action == "dag_converged" and data.get("dag_converged") is True and not data.get("pending"):
         output("approve", "Bug Validation barrier converged", "All Bug Validator jobs reached a legal terminal state.")
         return 0
-    return block("FM-Agent barrier is non-terminal or malformed", "Only dag_converged permits Bug Validation to end; preserve the current job_id and attempt.")
+    if phase == "bug_validation" and action not in {"phase_failed"}:
+        return block("FM-Agent barrier is non-terminal or malformed", "Only dag_converged permits Bug Validation to end; preserve the current job_id and attempt.")
+
+    # The first Stop event records a ticket and blocks. On hook re-entry the
+    # supervisor starts a native Claude/Codex continuation, and only then may
+    # this turn be approved. `stop_hook_active` is therefore never a blanket
+    # approval path.
+    return continuation_decision(plugin_root, source_project, stop_hook_active, hook_session_id)
 
 
 if __name__ == "__main__":

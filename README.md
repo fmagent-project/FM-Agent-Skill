@@ -393,7 +393,23 @@ claude plugin install fm-agent-skill@fm-agent-skill
 继续执行刚才中断的 FM-Agent 分析。
 ```
 
+如果 Claude 在 specification、verification 或 Bug Validation 阶段因上下文、工具调用或 Worker
+时限结束，当前轮停止不代表分析成功；下一轮会从 checkpoint 继续相同的 job 和 attempt。修改本地
+插件源码后，需要重新安装/刷新插件缓存并启动新的 Claude Code 会话，否则 Stop Hook 可能仍使用旧版本：
+
+```bash
+claude plugin marketplace add ./
+claude plugin install fm-agent-skill@fm-agent-skill
+```
+
+若插件已安装，先卸载旧版本再执行上述安装命令，或使用项目现有的插件更新流程。
+
 普通 run 会自动续跑兼容的中断分析；临时 worktree 丢失时会由 active Git ref 与持久化 checkpoint 重建，不受原工作区后续源码修改影响。
+
+Claude Stop Hook 会在未收敛时写入 continuation ticket。Hook 重入后，插件内的
+`continuation_supervisor.py` 只调用原生 Claude/Codex CLI，不调用任何模型 SDK、HTTP 或 API。Hook 提供会话标识时使用 `claude --resume <session-id>` 或 `codex resume <session-id>`；没有标识时才使用带项目、snapshot 和 fingerprint 校验的最近会话回退。
+若使用 Codex 工作流，可设置 `FM_AGENT_CONTINUATION_HOST=codex`，由同一 supervisor 调用原生
+`codex resume --last`。宿主 CLI 不可用时仍会保留 ticket，下一次普通 run 会自动从 checkpoint 继续。
 
 full、incremental 和 resume 都会在每个阶段前显示“当前阶段/总阶段数”；resume 会先显示恢复位置，no-op 会明确说明没有执行分析阶段。
 

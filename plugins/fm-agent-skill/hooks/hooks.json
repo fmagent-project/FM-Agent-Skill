@@ -1,5 +1,5 @@
 {
-  "description": "Prevent Claude from ending an FM-Agent Bug Validation run before its durable barrier converges.",
+  "description": "Continue unfinished FM-Agent runs through the native Claude CLI without direct model API calls.",
   "hooks": {
     "Stop": [
       {

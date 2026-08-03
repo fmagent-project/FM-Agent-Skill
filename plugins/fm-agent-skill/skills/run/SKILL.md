@@ -503,6 +503,27 @@ that exact `job_id` and `attempt`. A classifier outage is an infrastructure
 pause, not a runtime probe result; duplicate dispatches can create conflicting
 attempt-local artifacts.
 
+### Coordinator turn boundaries
+
+Stages 6 (`specification`), 7 (`verification`), and 8 (`bug_validation`) are
+streaming DAGs and may require more than one Claude turn. Reaching a host
+context, tool-call, or worker-time limit is an interrupted run, never phase
+completion and never a successful analysis. Before yielding for such a limit,
+call `durable_executor.py checkpoint` while the private snapshot is still
+available and report the exact current phase and pending action. The next turn
+must invoke the normal `run` entry point with no new change note, or explicit
+`--resume`; it must reclaim the same checkpoint and continue the first
+incomplete job. Do not create a new dispatch, reset artifacts, summarize
+partial results, or call `pipeline.py complete` at a turn boundary.
+
+The Stop Hook writes a durable continuation ticket. On hook re-entry,
+`hooks/continuation_supervisor.py` may launch the installed native Claude/Codex
+CLI (`--resume <session-id>` when supplied, otherwise the validated
+`claude --continue` or `codex resume --last` fallback) and only then approve the
+current stop. It never calls a model SDK or API. If the native CLI is absent or
+fails, the hook remains blocking and the ticket is resumed by the next ordinary
+run. `stop_hook_active=true` is never a blanket approval path.
+
 After Stage 8 starts, remain in this loop until it reaches one of the two
 machine-observable terminal states below. Launching a bounded group of
 background Workers is only one iteration; it is never phase completion.

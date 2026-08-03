@@ -88,9 +88,23 @@ partially invalid batch and retry only invalid functions.
 ## Host boundary
 
 The Skill persists safely across turns and the next ordinary run continues
-automatically without requiring `--resume`. If the host terminates the whole Codex/Claude session, the Skill
-cannot create another session by itself. Truly unattended cross-session
-continuation requires a Codex/Claude plugin continuation hook.
+automatically without requiring `--resume`. The Claude Stop Hook now writes a
+durable continuation ticket and, on hook re-entry, the bundled supervisor may
+launch the installed native Claude/Codex CLI. When the hook supplies a session
+identifier it invokes `claude --resume <id>` or `codex resume <id>`; only when
+no identifier exists does it fall back to `claude --continue`/`codex resume
+--last`, after validating project, snapshot and fingerprint. The supervisor
+never calls a model SDK or HTTP API.
+If the host CLI is unavailable, authentication is expired, or the host blocks
+child sessions, the ticket remains durable and the next ordinary run can
+resume it; no script can manufacture a host session without that host
+capability.
+
+A host turn ending because of context, tool-call, or worker limits is therefore
+an interrupted run, not a phase boundary. The Coordinator must checkpoint the
+current durable state before yielding and the next invocation must reclaim the
+same snapshot, job IDs, attempts, and leases. It must not treat a partial
+worker batch, a report file, or a Stop Hook re-entry as phase completion.
 
 ## Terminal authority
 
