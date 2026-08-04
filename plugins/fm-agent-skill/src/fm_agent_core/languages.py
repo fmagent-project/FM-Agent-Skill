@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import ast
+import ctypes
+import importlib
 import json
 from pathlib import Path
 import re
@@ -154,13 +156,27 @@ def _tree_sitter_spans(path: Path, profile: LanguageProfile) -> list[tuple[str, 
     try:
         from tree_sitter_languages import get_parser  # type: ignore[import-not-found]
     except ImportError:
-        return None
+        get_parser = None
     parser = None
     for name in profile.treesitter_languages:
-        try:
-            parser = get_parser(name); break
-        except Exception:
+        if get_parser is not None:
+            try:
+                parser = get_parser(name); break
+            except Exception:
+                pass
+        language = _tree_sitter_language(name)
+        if language is None:
             continue
+        try:
+            import tree_sitter  # type: ignore[import-not-found]
+            parser = tree_sitter.Parser()
+            try:
+                parser.language = language
+            except (AttributeError, TypeError):
+                parser.set_language(language)
+            break
+        except Exception:
+            parser = None
     if parser is None: return None
     source = path.read_bytes(); tree = parser.parse(source); found = []
     node_types = {"function_definition", "function_declaration", "function_item", "method_definition", "method_declaration", "generator_function_declaration"}
@@ -193,6 +209,44 @@ def _tree_sitter_spans(path: Path, profile: LanguageProfile) -> list[tuple[str, 
         name = source[name_node.start_byte:name_node.end_byte].decode("utf-8", "replace")
         if re.fullmatch(r"[A-Za-z_$][\w$]*", name): found.append((name, span.start_point[0] + 1, span.end_point[0] + 1))
     return sorted(set(found), key=lambda item: (item[1], item[2], item[0]))
+
+
+def _tree_sitter_language(name: str):
+    """Load a grammar across old and new Python Tree-sitter bindings.
+
+    ``tree_sitter_languages`` currently targets the pre-0.22 API, while the
+    standalone grammar wheels expose a PyCapsule consumed by newer bindings.
+    Convert that capsule explicitly instead of making extraction depend on one
+    exact package combination.
+    """
+    modules = {
+        "typescript": ("tree_sitter_typescript", "language_typescript"),
+        "tsx": ("tree_sitter_typescript", "language_tsx"),
+        "javascript": ("tree_sitter_javascript", "language"),
+        "python": ("tree_sitter_python", "language"),
+        "c": ("tree_sitter_c", "language"),
+        "cpp": ("tree_sitter_cpp", "language"),
+        "rust": ("tree_sitter_rust", "language"),
+        "go": ("tree_sitter_go", "language"),
+        "java": ("tree_sitter_java", "language"),
+    }
+    spec = modules.get(name)
+    if spec is None:
+        return None
+    try:
+        capsule = getattr(importlib.import_module(spec[0]), spec[1])()
+        if type(capsule).__name__ != "PyCapsule":
+            return capsule
+        api = ctypes.pythonapi
+        api.PyCapsule_GetPointer.restype = ctypes.c_void_p
+        api.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+        pointer = api.PyCapsule_GetPointer(capsule, b"tree_sitter.Language")
+        if not pointer:
+            return None
+        import tree_sitter  # type: ignore[import-not-found]
+        return tree_sitter.Language(pointer)
+    except (AttributeError, ImportError, OSError, TypeError, ValueError):
+        return None
 
 
 _ARKTS_SKIP = frozenset({

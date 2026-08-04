@@ -159,7 +159,7 @@ def fingerprint(project: Path, one_phase: bool, submodules: list[str], extra_edg
 
 
 def source_files(project: Path) -> list[Path]:
-    ignored = {".git", ".venv", "node_modules", "fm_agent", "fm_agent_skill", "fm_agent_plugin", ".codegraph", "build", "dist", "out", "target", "CMakeFiles"}
+    ignored = {".git", ".venv", "node_modules", "oh_modules", "fm_agent", "fm_agent_skill", "fm_agent_plugin", ".codegraph", "build", "dist", "out", "target", "CMakeFiles"}
     found = []
     for root, directories, files in os.walk(project):
         directories[:] = [name for name in directories if name not in ignored]
