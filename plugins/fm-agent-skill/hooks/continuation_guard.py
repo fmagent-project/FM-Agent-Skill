@@ -143,6 +143,17 @@ def main() -> int:
     marker_path = project / "fm_agent_skill" / "isolation.json"
     if not marker_path.is_file():
         if requires_continuation(source_active):
+            # Finalize removes the disposable isolation marker. If the source
+            # mirror was published just before that cleanup, use its terminal
+            # analysis status as the authoritative fallback instead of
+            # trapping the host on a stale running active.json.
+            terminal = read_json(project / "fm_agent" / "analysis_status.json", {})
+            if isinstance(terminal, dict) and (
+                terminal.get("status") in {"succeeded", "failed", "incomplete", "noop"}
+                or terminal.get("official_result_available") is True
+            ):
+                output("approve", "FM-Agent terminal mirror is published", "The isolated worktree was finalized and its terminal report is available.")
+                return 0
             return block("FM-Agent isolation marker is missing", "An unfinished FM-Agent run has no fm_agent_skill/isolation.json; refusing to inspect or stop against the original project.")
         output("approve", "no active isolated FM-Agent run", "No active isolated FM-Agent run requires continuation.")
         return 0

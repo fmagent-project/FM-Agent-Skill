@@ -131,7 +131,14 @@ def publish_progress(snapshot: Path, manifest: dict, record: dict) -> dict:
         origin_file = snapshot_skill / filename
         destination_file = source_skill / filename
         if origin_file.is_file():
-            shutil.copy2(origin_file, destination_file)
+            # `checkpoint.commit()` receives the post-transition record, but
+            # the snapshot's live active.json may still contain the pre-save
+            # status. Publish the supplied record for active.json so finalize
+            # cannot leave a stale `running` state in the source project.
+            if filename == "active.json":
+                state.atomic_json(destination_file, record)
+            else:
+                shutil.copy2(origin_file, destination_file)
     for directory in ("control", "jobs"):
         origin_dir = snapshot_skill / directory
         destination_dir = source_skill / directory
