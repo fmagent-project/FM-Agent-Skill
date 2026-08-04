@@ -120,6 +120,28 @@ def publish_progress(snapshot: Path, manifest: dict, record: dict) -> dict:
         os.replace(destination, previous)
     os.replace(temporary, destination)
     shutil.rmtree(previous, ignore_errors=True)
+    # Keep the Coordinator's resumable presentation state beside the mirror.
+    # The SQLite checkpoint remains authoritative; these files make an
+    # interrupted run discoverable from the source project without copying
+    # the checkpoint database into itself.
+    source_skill = source / "fm_agent_skill"
+    snapshot_skill = snapshot / "fm_agent_skill"
+    source_skill.mkdir(parents=True, exist_ok=True)
+    for filename in ("active.json", "config.json", "isolation.json", "failure.json"):
+        origin_file = snapshot_skill / filename
+        destination_file = source_skill / filename
+        if origin_file.is_file():
+            shutil.copy2(origin_file, destination_file)
+    for directory in ("control", "jobs"):
+        origin_dir = snapshot_skill / directory
+        destination_dir = source_skill / directory
+        temporary_dir = source_skill / f".{directory}.progress.{os.getpid()}.tmp"
+        shutil.rmtree(temporary_dir, ignore_errors=True)
+        if origin_dir.is_dir():
+            shutil.copytree(origin_dir, temporary_dir, symlinks=True)
+            if destination_dir.exists():
+                shutil.rmtree(destination_dir)
+            os.replace(temporary_dir, destination_dir)
     return {
         "published": True,
         "path": str(destination),
