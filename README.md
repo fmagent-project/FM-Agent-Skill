@@ -27,7 +27,11 @@ no-op detection, persistent checkpoints, and automatic safe continuation.
   Pre-schema-v2 verification artifacts are intentionally not reusable as a
   baseline and cause the next ordinary analysis to rebuild them.
 - Build controlled isolated reproductions for eligible direct violations and
-  report a confirmed defect only after actual dynamic evidence.
+  report a confirmed defect only after actual dynamic evidence. Bug Validation
+  is optional and runs only on-demand via `--validate FUNCTION_ID`; by default
+  the Skill reports every schema-v2 `MISMATCH` as a **static finding** — a
+  high-confidence identification backed by a concrete counterexample and exact
+  source quote, not a guess.
 - Keep schema-v2 normative evidence separate from implementation observations.
   High-confidence contracts require exact copied user/public documentation;
   generated context, implementation literals, caller-only cycles, and
@@ -92,6 +96,7 @@ or natural-language request passes them in:
   [--extra-edge FILE_OR_DIR]
   [--one-phase]
   [--resume]
+  [--validate FUNCTION_ID]
 ```
 
 | Option | Purpose |
@@ -101,6 +106,7 @@ or natural-language request passes them in:
 | `--extra-edge` | Add static call-graph edges. |
 | `--one-phase` | Generate specifications in one phase. |
 | `--resume` | Explicitly continue the eligible interrupted full or incremental analysis. It cannot be combined with a new note or configuration options. |
+| `--validate` | Run dynamic Bug Validation only for the named function's existing MISMATCH candidate. Requires a completed analysis baseline. |
 
 There is normally no need to select full or incremental mode manually. The
 Skill selects it from its Git baseline commit and the current snapshot commit.
@@ -111,9 +117,11 @@ The Coordinator is the only SQLite/control-state writer. It maps phase
 planning, domain context, specification batches, function verification, Bug
 Validator, incremental selection, update planning, and caller reconciliation
 to named host subagents. It streams ready DAG jobs with an enforced global
-maximum of `10` workers (specification
-`4`, verification `8`, Bug Validator `2`, read-only planning `2`) and evaluates
-each phase gate after its jobs converge. The Coordinator receives compact worker receipts and
+maximum of `16` workers (specification
+`6`, verification `12`, Bug Validator `4`, read-only planning `4`) and evaluates
+each phase gate after its jobs converge. Stages 1–7 run as an atomic unit;
+Bug Validation (stage 8) is optional — skipped by default, run on-demand via
+`--validate FUNCTION_ID`.  The Coordinator receives compact worker receipts and
 uses a phase receipt to inspect only escalations. Read
 [the scheduler contract](plugins/fm-agent-skill/references/subagent-scheduler.md)
 for the worker mapping and recovery rules.
@@ -146,7 +154,22 @@ the batch and retries only those pairs. A failed phase never falls back to a
 static-audit result. The original worktree receives a small failure receipt,
 and `diagnose.py` reports that no official result exists until all gates pass.
 
-Bug validation has two deliberately separate surfaces. `probe_runner.py` is a
+Bug Validation (dynamic reproduction) is **optional** and runs only on-demand via
+`--validate FUNCTION_ID`.  By default the Skill completes after stage 7
+(verification) and reports every schema-v2 `MISMATCH` as a **static finding**
+(`confirmation_status: static_finding`) — a high-confidence identification backed
+by a concrete `A ∧ ¬B` counterexample and exact source quote from the
+Verification Worker.  Static findings are listed alongside confirmed, rejected,
+and inconclusive dynamic results in the terminal report; they are clearly labeled
+as not dynamically confirmed.
+
+When `--validate` is supplied, the Skill runs the full Bug Validation state
+machine for a single function's MISMATCH candidate: `durable_executor.py next` →
+Worker preparation → execution → finalization → retry/summary, up to five
+runtime attempts with three negative probes per attempt.  A single-function
+validation is bounded enough to complete in one turn under normal conditions.
+
+Bug Validation has two deliberately separate surfaces. `probe_runner.py` is a
 language-profile-selected build or syntax check and is never behavioral proof.
 The default `agent-executed` Bug Validator first designs a public-entrypoint
 probe, then its Codex/Claude Worker runs the smallest project-scoped command
@@ -161,10 +184,11 @@ as FM-Agent because CodeGraph does not index `.ets`. For an ArkTS snapshot, the
 Skill copies only project-local, lock-verified `oh_modules/` into the private
 snapshot; it never runs `ohpm install` or copies `.hvigor/`. If those existing
 dependencies are unavailable or unsafe, ArkTS dynamic validation is
-`unsupported/inconclusive` rather than a reason to require HDC. This compatibility mode is not a sandbox
-guarantee: use it only for projects you trust. It forbids `sudo`, dependency
-installation, Git-state changes and unrelated file access, but it does not
-provide the fixed-argv isolation of the optional `adapter` mode.
+`unsupported/inconclusive` rather than a reason to require HDC. This
+compatibility mode is not a sandbox guarantee: use it only for projects you
+trust. It forbids `sudo`, dependency installation, Git-state changes and
+unrelated file access, but it does not provide the fixed-argv isolation of the
+optional `adapter` mode.
 
 Up to four Bug Validator jobs run concurrently by default. Every dynamic Worker
 uses its own attempt-local workspace and cache; it must not write shared
@@ -385,7 +409,7 @@ claude plugin install fm-agent-skill@fm-agent-skill
 ```
 
 支持命令入口或自然语言请求附带修改说明、`--submodule`、`--knowledge`、`--extra-edge`、
-`--one-phase` 或 `--resume`。
+`--one-phase`、`--resume` 或 `--validate FUNCTION_ID`。
 
 如需续跑被中断的 full 或 incremental，请明确请求：
 
@@ -406,7 +430,9 @@ claude plugin install fm-agent-skill@fm-agent-skill
 
 普通 run 会自动续跑兼容的中断分析；临时 worktree 丢失时会由 active Git ref 与持久化 checkpoint 重建，不受原工作区后续源码修改影响。
 
-Claude Stop Hook 会在未收敛时写入 continuation ticket。Hook 重入后，插件内的
+Claude Stop Hook 会在 Bug Validation 未收敛时写入 continuation ticket。阶段 1–7 完成后
+（无活跃 BV 作业），Stop Hook 直接批准停止，无需启动 supervisor；仅当 BV 仍在运行时才通过
+supervisor 启动原生 CLI 恢复。Hook 重入后，插件内的
 `continuation_supervisor.py` 只调用原生 Claude/Codex CLI，不调用任何模型 SDK、HTTP 或 API。Hook 提供会话标识时使用 `claude --resume <session-id>` 或 `codex resume <session-id>`；没有标识时才使用带项目、snapshot 和 fingerprint 校验的最近会话回退。
 若使用 Codex 工作流，可设置 `FM_AGENT_CONTINUATION_HOST=codex`，由同一 supervisor 调用原生
 `codex resume --last`。宿主 CLI 不可用时仍会保留 ticket，下一次普通 run 会自动从 checkpoint 继续。
@@ -418,7 +444,9 @@ full、incremental 和 resume 都会在每个阶段前显示“当前阶段/总�
 ## Claude worker 调度、失败与恢复
 
 Coordinator 是 SQLite 与控制状态的唯一写入者。它按 durable DAG 流式推进，最多并发
-全局最多运行 10 个独立 worker（规格 4、验证 8、Bug Validator 2、只读增量计划 2）；调度器在启动前强制占用名额，join 后写入阶段回执并通过 gate 才能进入下一阶段。
+全局最多运行 16 个独立 worker（规格 6、验证 12、Bug Validator 4、只读增量计划 4）；调度器在启动前强制占用名额，join 后写入阶段回执并通过 gate 才能进入下一阶段。
+阶段 1–7 作为原子单元运行；Bug Validation（阶段 8）是可选的 —— 默认跳过，通过
+`--validate FUNCTION_ID` 按需运行。
 每个语义单元有固定 job id，权威状态保存在 `fm_agent_skill/checkpoint/state.db`，JSON 仅供 Worker 读取和旧状态诊断。
 
 超时、限流、Agent 工具失败、缺失产物或无效产物会成为 `retryable`。Coordinator 会在**同一个
@@ -427,7 +455,16 @@ domain context 每次失败后等待 10 秒；spec 阶段若已得到部分有�
 无任何进展才等待 10 秒。有效 sidecar 会保留。
 
 验证推理本身失败时应写出有效的 `ERROR` result，而不是重复调度；只有 Agent 或结果产物失败才
-重试。默认的 Bug Validator 先设计公共入口 probe，再由 Codex/Claude Worker 使用项目已有工具链实际执行，并记录精确命令、输出和退出码；默认最多并发两个 job，每个 job 只能使用自身 attempt 目录下的 workspace 和缓存，不能写入项目根目录的共享构建产物。构建或语法检查不能确认缺陷。该快速兼容模式不是沙箱保证：仅用于可信项目，且 Worker 不得使用 `sudo`、安装依赖、修改 Git 状态或读取无关用户文件。需要固定 argv、禁网和只读项目隔离时，将 `bug_validation_execution` 设为 `adapter`。运行或产物失败最多尝试 5 次；正常完成但未复现或证据不足时会在同一 job 内额外复测 2 次，并保留全部 probe 证据。`input`、`semantic` 和 `cancelled` 是终止失败：下游
+重试。
+
+Bug Validation（动态复现）是**可选的**，仅通过 `--validate FUNCTION_ID` 按需运行。默认情况下，
+分析在阶段 7（verification）完成后结束，将每个 schema-v2 `MISMATCH` 报告为 **static finding**
+（`confirmation_status: static_finding`）——由具体反例和精确源码引用支撑的高置信度识别，而非猜测。
+Terminal report 中 static findings 与 confirmed/rejected/inconclusive 分开列出，并明确标注为
+"未经动态确认"。当提供 `--validate` 时，对单个函数运行完整的 Bug Validation 状态机，最多 5 次
+运行时尝试，每次尝试最多 3 次负向探针。单函数验证范围有限，正常可在单轮内完成。
+
+默认的 Bug Validator 先设计公共入口 probe，再由 Codex/Claude Worker 使用项目已有工具链实际执行，并记录精确命令、输出和退出码；默认最多并发 4 个 job，每个 job 只能使用自身 attempt 目录下的 workspace 和缓存，不能写入项目根目录的共享构建产物。构建或语法检查不能确认缺陷。该快速兼容模式不是沙箱保证：仅用于可信项目，且 Worker 不得使用 `sudo`、安装依赖、修改 Git 状态或读取无关用户文件。需要固定 argv、禁网和只读项目隔离时，将 `bug_validation_execution` 设为 `adapter`。运行或产物失败最多尝试 5 次；正常完成但未复现或证据不足时会在同一 job 内额外复测 2 次，并保留全部 probe 证据。`input`、`semantic` 和 `cancelled` 是终止失败：下游
 不会启动，当前阶段失败，但已有独立有效产物会保留。resume 前会先回收遗留 `running` job：产物有效
 则直接成功，否则在次数未耗尽时原地转为 `retryable`。
 

@@ -347,10 +347,10 @@ workers than returned tickets.
 Replace `<HOST_SLOTS>` with a positive integer no larger than the host's
 currently available native subagent slots or the configured phase cap.
 The default global cap is 16 (`max_active_subagents`); each phase type has
-its own concurrency limit: specification batches 6, verification 12, Bug
+its own concurrency limit: specification batches 8, verification 12, Bug
 Validation 4, incremental plans 4, and all other workers 1 each. Use the
 tightest applicable bound: for specification, `min(<available subagents>,
-6)`, and for Bug Validation, `min(<available subagents>, 4)`. It is never
+8)`, and for Bug Validation, `min(<available subagents>, 4)`. It is never
 an error to use a smaller number when fewer host slots are free.
 
 Submit semantic receipts only through:
@@ -571,11 +571,12 @@ context or tool-call limit mid-validation, checkpoint the durable state and
 let the next ordinary run or explicit `--resume` continue that exact job id
 and attempt.
 
-### Coordinator non-termination guard (active Bug Validation only)
+### Coordinator non-termination guard (all active phases)
 
-When Bug Validation **is** running (either a legacy batched run or an active
-`--validate` job), the Coordinator must treat every non-terminal executor
-response as a continuation request:
+When any analysis phase is active, the Coordinator must treat every
+non-terminal executor response as a continuation request. This applies to
+specification, verification, and Bug Validation (including legacy batched and
+`--validate` jobs):
 
 - `host_worker`, `wait_for_completion_event`, `scheduler_retry`, and
   `submit_agent_execution` are **not** terminal responses;
@@ -595,11 +596,12 @@ do not launch the same Worker/attempt again and do not mark it failed. Preserve
 the durable ticket, wait or hand off to a later Coordinator turn, then resume
 that exact `job_id` and `attempt`.
 
-The Stop Hook for active Bug Validation writes a durable continuation ticket.
-On hook re-entry, `hooks/continuation_supervisor.py` may launch the installed
-native Claude/Codex CLI and only then approve the current stop.  When Bug
-Validation is not active (no queued/running/retryable BV jobs), the Stop Hook
-approves the stop directly without launching a supervisor.
+The Stop Hook for every unfinished isolated run writes a durable continuation
+ticket. On hook re-entry, `hooks/continuation_supervisor.py` may launch the
+installed native Claude/Codex CLI and only then approve the current stop. A
+stop is never approved merely because the current phase is before Bug
+Validation; only a terminal active record or a validated phase-failure report
+permits it.
 
 ### Bug Validation loop (single or legacy batch)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Block Claude from stopping an unfinished Bug Validation run."""
+"""Block Claude from stopping an unfinished FM-Agent analysis run."""
 from __future__ import annotations
 
 import json

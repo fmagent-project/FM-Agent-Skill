@@ -19,7 +19,11 @@ JOB_TYPES = {"phase_plan", "phase_refine", "domain_context", "resolve_agent_stat
 RETRYABLE_FAILURES = {"execution", "output", "interrupted"}
 FAILURE_CLASSES = RETRYABLE_FAILURES | {"input", "semantic", "cancelled"}
 ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-MAX_REPORT_BYTES = 4096
+# Batch receipts must enumerate their assigned output paths exactly.  A
+# verification/spec batch can legitimately contain dozens of long relative
+# paths; 4 KiB rejected valid receipts before artifact validation ran.  Keep a
+# bounded limit, but leave enough room for the manifest-sized output list.
+MAX_REPORT_BYTES = 8192
 REPORT_KEYS = {"job_id", "status", "outputs", "verdict", "classification", "escalation", "counts", "summary", "plan_path"}
 BUG_CLASSIFICATIONS = {"confirmed", "not_reproduced", "rejected", "inconclusive"}
 BUG_NEGATIVE_CLASSIFICATIONS = BUG_CLASSIFICATIONS - {"confirmed"}
@@ -32,7 +36,7 @@ TYPE_CAP_KEYS = {
 }
 DEFAULT_CAPS = {
     "max_active_subagents": 16,
-    "spec_concurrency": 6,
+    "spec_concurrency": 8,
     "verify_concurrency": 12,
     "bug_validation_concurrency": 4,
     "read_only_plan_concurrency": 4,

@@ -14,7 +14,7 @@ reusing specifications built for a different scope or knowledge set.
 
 `scheduler_executor` is fixed to `host-subagent`: semantic work uses the active
 Claude Code or Codex subagent facility. The enforced default profile is sixteen
-active workers globally, six specification batches, twelve verification workers,
+active workers globally, eight specification batches, twelve verification workers,
 four Bug Validators, and four read-only incremental plan workers. Configure these
 through `max_active_subagents`, `spec_concurrency`, `verify_concurrency`,
 `bug_validation_concurrency`, and `read_only_plan_concurrency`.

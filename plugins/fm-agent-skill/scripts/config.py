@@ -12,7 +12,9 @@ DEFAULTS = {
     "submodules": [], "one_phase": False,
     "scheduler_executor": "host-subagent",
     "max_active_subagents": 16,
-    "spec_concurrency": 6,
+    # Same-layer specification batches are independent after their caller
+    # dependencies are satisfied; keep this below the global cap.
+    "spec_concurrency": 8,
     "verify_concurrency": 12,
     "bug_validation_concurrency": 4,
     "read_only_plan_concurrency": 4,
