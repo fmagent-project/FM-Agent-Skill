@@ -46,6 +46,20 @@ def normalize_phases(target: Path) -> dict:
     path = state.fm_dir(target) / "phases.json"; raw = state.read_json(path, {})
     phases = raw.get("phases") if isinstance(raw, dict) else None
     if not isinstance(phases, list): raise ValueError("phases.json must contain a phases array")
+    # Workers commonly use stable phase IDs in dependencies (for example
+    # ``phase-1-foundation-types``), while the normalized schema uses ordinal
+    # integers.  Resolve both forms at the deterministic boundary so a
+    # semantically valid plan does not require a manual snapshot edit.
+    phase_aliases: dict[object, int] = {}
+    for position, phase in enumerate(phases, 1):
+        if not isinstance(phase, dict):
+            continue
+        number = phase.get("phase", position)
+        if isinstance(number, int) and number > 0:
+            phase_aliases[number] = number
+            for key in (phase.get("id"), phase.get("name"), f"phase-{number}"):
+                if isinstance(key, str) and key:
+                    phase_aliases[key] = number
     planned = []
     for position, phase in enumerate(phases, 1):
         if not isinstance(phase, dict): raise ValueError("every phase must be an object")
@@ -69,8 +83,14 @@ def normalize_phases(target: Path) -> dict:
                     sources.append(rel)
             if sources: clean_modules.append({"name": str(module.get("name", f"phase-{number}")), "description": str(module.get("description", "")), "source_files": sorted(set(sources))})
         dependencies = phase.get("depends_on_phases", phase.get("dependencies", []))
-        if not isinstance(dependencies, list) or not all(isinstance(value, int) and value > 0 for value in dependencies): raise ValueError(f"phase {number} has invalid dependencies")
-        planned.append({"original_phase": number, "name": str(phase.get("name", f"phase-{number}")), "description": str(phase.get("description", "")), "modules": clean_modules, "dependencies": sorted(set(dependencies))})
+        if not isinstance(dependencies, list): raise ValueError(f"phase {number} has invalid dependencies")
+        resolved_dependencies = []
+        for value in dependencies:
+            resolved = phase_aliases.get(value) if isinstance(value, (int, str)) else None
+            if not isinstance(resolved, int) or resolved < 1:
+                raise ValueError(f"phase {number} has invalid dependency: {value}")
+            resolved_dependencies.append(resolved)
+        planned.append({"original_phase": number, "name": str(phase.get("name", f"phase-{number}")), "description": str(phase.get("description", "")), "modules": clean_modules, "dependencies": sorted(set(resolved_dependencies))})
     production = [item for item in planned if item["modules"]]
     if not production: raise ValueError("no production phases remain after normalization")
     numbers = {item["original_phase"]: index for index, item in enumerate(production, 1)}
